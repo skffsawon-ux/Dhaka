@@ -34,8 +34,18 @@ def generate_launch_description():
         }]
     )
 
-    # Return LaunchDescription with both nodes
+    # Health monitor node - monitors critical services and reports errors
+    # This lightweight node helps the app understand WHY services are unavailable
+    health_monitor_node = Node(
+        package='maurice_control',
+        executable='health_monitor.py',
+        name='health_monitor',
+        output='screen'
+    )
+
+    # Return LaunchDescription with all nodes
     return LaunchDescription([
         rosbridge_node,
-        app_node
+        app_node,
+        health_monitor_node
     ])

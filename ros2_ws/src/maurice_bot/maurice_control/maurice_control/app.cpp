@@ -11,6 +11,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <maurice_msgs/srv/set_robot_name.hpp>
 #include <maurice_msgs/srv/trigger_update.hpp>
+#include <maurice_msgs/srv/shutdown.hpp>
 
 #include <nlohmann/json.hpp>
 #include <yaml-cpp/yaml.h>
@@ -262,6 +263,12 @@ public:
         trigger_update_srv_ = this->create_service<maurice_msgs::srv::TriggerUpdate>(
             "/trigger_update",
             std::bind(&AppControl::trigger_update_callback, this,
+                      std::placeholders::_1, std::placeholders::_2));
+
+        // Service for system shutdown
+        shutdown_srv_ = this->create_service<maurice_msgs::srv::Shutdown>(
+            "/shutdown",
+            std::bind(&AppControl::shutdown_callback, this,
                       std::placeholders::_1, std::placeholders::_2));
 
         RCLCPP_INFO(this->get_logger(), "AppControl node started. [C++]");
@@ -647,6 +654,51 @@ private:
         response->message = "Not implemented. SSH into the robot and run: innate-update apply";
     }
 
+    /**
+     * Service callback to shutdown the Jetson.
+     * Uses 'sudo shutdown' command with optional delay.
+     */
+    void shutdown_callback(
+        const std::shared_ptr<maurice_msgs::srv::Shutdown::Request> request,
+        std::shared_ptr<maurice_msgs::srv::Shutdown::Response> response) {
+
+        try {
+            int delay = request->delay_seconds;
+            if (delay < 0) {
+                delay = 0;
+            }
+
+            std::string shutdown_cmd;
+            if (delay == 0) {
+                shutdown_cmd = "sudo shutdown now";
+            } else {
+                shutdown_cmd = "sudo shutdown +" + std::to_string(delay / 60 + 1);  // shutdown uses minutes
+            }
+
+            RCLCPP_WARN(this->get_logger(), "Shutdown requested with delay: %d seconds. Executing: %s",
+                        delay, shutdown_cmd.c_str());
+
+            // Execute shutdown command in background so we can respond first
+            std::string bg_cmd = shutdown_cmd + " &";
+            int result = std::system(bg_cmd.c_str());
+
+            if (result == 0) {
+                response->success = true;
+                response->message = "Shutdown initiated" + (delay > 0 ? " with delay of " + std::to_string(delay) + " seconds" : "");
+                RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
+            } else {
+                response->success = false;
+                response->message = "Failed to execute shutdown command (exit code: " + std::to_string(result) + ")";
+                RCLCPP_ERROR(this->get_logger(), "%s", response->message.c_str());
+            }
+
+        } catch (const std::exception& e) {
+            response->success = false;
+            response->message = std::string("Failed to initiate shutdown: ") + e.what();
+            RCLCPP_ERROR(this->get_logger(), "%s", response->message.c_str());
+        }
+    }
+
     // Member variables
     json app_config_;
 
@@ -672,9 +724,10 @@ private:
     // Timer
     rclcpp::TimerBase::SharedPtr robot_info_timer_;
 
-    // Services
+    // Servicess
     rclcpp::Service<maurice_msgs::srv::SetRobotName>::SharedPtr set_robot_name_srv_;
     rclcpp::Service<maurice_msgs::srv::TriggerUpdate>::SharedPtr trigger_update_srv_;
+    rclcpp::Service<maurice_msgs::srv::Shutdown>::SharedPtr shutdown_srv_;
 };
 
 } // namespace maurice_control

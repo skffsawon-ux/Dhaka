@@ -1,0 +1,14 @@
+# Shutdown Service
+# Triggers a system shutdown on the Jetson
+
+# Request
+# delay_seconds: Time to wait before shutdown (default 0 = immediate)
+int32 delay_seconds
+
+---
+
+# Response
+bool success
+string message
+
+
