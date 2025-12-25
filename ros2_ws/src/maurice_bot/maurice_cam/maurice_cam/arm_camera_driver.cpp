@@ -8,21 +8,21 @@ namespace maurice_cam
 
 ArmCameraDriver::ArmCameraDriver() : Node("arm_camera_driver"), 
                    invalid_buffer_index_count_(0) {
-    RCLCPP_INFO(this->get_logger(), "Initializing arm camera driver...");
-    RCLCPP_INFO(this->get_logger(), "OpenCV version: %s", CV_VERSION);
+    RCLCPP_DEBUG(this->get_logger(), "Initializing arm camera driver...");
+    RCLCPP_DEBUG(this->get_logger(), "OpenCV version: %s", CV_VERSION);
 
     // Parameters
-    this->declare_parameter("camera_symlink", "usb-Arducam_Technology_Co.__Ltd._Arducam_USB_Camera_UC684-video-index0");
-    this->declare_parameter("width", 640);
-    this->declare_parameter("height", 480);
-    this->declare_parameter("fps", 30);
-    this->declare_parameter("pixel_format", "YUYV");
+    this->declare_parameter<std::string>("camera_symlink", "usb-Arducam_Technology_Co.__Ltd._Arducam_USB_Camera_UC684-video-index0");
+    this->declare_parameter<int>("width", 640);
+    this->declare_parameter<int>("height", 480);
+    this->declare_parameter<double>("fps", 30.0);
+    this->declare_parameter<std::string>("pixel_format", "YUYV");
 
     // Get parameters
     std::string camera_symlink = this->get_parameter("camera_symlink").as_string();
     width_ = this->get_parameter("width").as_int();
     height_ = this->get_parameter("height").as_int();
-    fps_ = this->get_parameter("fps").as_int();
+    fps_ = static_cast<int>(this->get_parameter("fps").as_double());
 
     // Resolve symlink to device path
     std::string symlink_path = "/dev/v4l/by-id/" + camera_symlink;
@@ -59,15 +59,15 @@ ArmCameraDriver::ArmCameraDriver() : Node("arm_camera_driver"),
     image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/mars/arm/image_raw", qos);
     compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/mars/arm/image_raw/compressed", qos);
     
-    RCLCPP_INFO(this->get_logger(), "Created publishers with sensor data QoS:");
-    RCLCPP_INFO(this->get_logger(), "  Raw image: /mars/arm/image_raw");
-    RCLCPP_INFO(this->get_logger(), "  Compressed image: /mars/arm/image_raw/compressed");
-    RCLCPP_INFO(this->get_logger(), "  QoS Settings:");
-    RCLCPP_INFO(this->get_logger(), "    - Reliability: BEST_EFFORT");
-    RCLCPP_INFO(this->get_logger(), "    - Durability: VOLATILE");
-    RCLCPP_INFO(this->get_logger(), "    - History: KEEP_LAST (10)");
-    RCLCPP_INFO(this->get_logger(), "    - Deadline: Default");
-    RCLCPP_INFO(this->get_logger(), "    - Liveliness: Default");
+    RCLCPP_DEBUG(this->get_logger(), "Created publishers with sensor data QoS:");
+    RCLCPP_DEBUG(this->get_logger(), "  Raw image: /mars/arm/image_raw");
+    RCLCPP_DEBUG(this->get_logger(), "  Compressed image: /mars/arm/image_raw/compressed");
+    RCLCPP_DEBUG(this->get_logger(), "  QoS Settings:");
+    RCLCPP_DEBUG(this->get_logger(), "    - Reliability: BEST_EFFORT");
+    RCLCPP_DEBUG(this->get_logger(), "    - Durability: VOLATILE");
+    RCLCPP_DEBUG(this->get_logger(), "    - History: KEEP_LAST (10)");
+    RCLCPP_DEBUG(this->get_logger(), "    - Deadline: Default");
+    RCLCPP_DEBUG(this->get_logger(), "    - Liveliness: Default");
 
     // Initialize camera
     if (!init_camera()) {
@@ -75,14 +75,12 @@ ArmCameraDriver::ArmCameraDriver() : Node("arm_camera_driver"),
         return;
     }
 
-    RCLCPP_INFO(this->get_logger(), "Arm camera initialized successfully");
-
     // Create timer for frame capture
     timer_ = this->create_wall_timer(
         std::chrono::milliseconds(1000 / fps_),
         std::bind(&ArmCameraDriver::capture_and_publish, this));
     
-    RCLCPP_INFO(this->get_logger(), "Arm camera driver is ready");
+    RCLCPP_INFO(this->get_logger(), "Arm camera driver ready");
 }
 
 ArmCameraDriver::~ArmCameraDriver() {
@@ -93,7 +91,7 @@ ArmCameraDriver::~ArmCameraDriver() {
 }
 
 bool ArmCameraDriver::init_camera() {
-    RCLCPP_INFO(this->get_logger(), "Opening camera device: %s", device_path_.c_str());
+    RCLCPP_DEBUG(this->get_logger(), "Opening camera device: %s", device_path_.c_str());
     
     // Check if device file exists first
     if (!std::filesystem::exists(device_path_)) {
@@ -113,10 +111,10 @@ bool ArmCameraDriver::init_camera() {
         return false;
     }
 
-    RCLCPP_INFO(this->get_logger(), "Camera capabilities:");
-    RCLCPP_INFO(this->get_logger(), "  Driver: %s", cap.driver);
-    RCLCPP_INFO(this->get_logger(), "  Card: %s", cap.card);
-    RCLCPP_INFO(this->get_logger(), "  Bus info: %s", cap.bus_info);
+    RCLCPP_DEBUG(this->get_logger(), "Camera capabilities:");
+    RCLCPP_DEBUG(this->get_logger(), "  Driver: %s", cap.driver);
+    RCLCPP_DEBUG(this->get_logger(), "  Card: %s", cap.card);
+    RCLCPP_DEBUG(this->get_logger(), "  Bus info: %s", cap.bus_info);
 
     if (!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)) {
         RCLCPP_ERROR(this->get_logger(), "Device does not support video capture");
@@ -135,10 +133,10 @@ bool ArmCameraDriver::init_camera() {
         return false;
     }
 
-    RCLCPP_INFO(this->get_logger(), "Set camera format:");
-    RCLCPP_INFO(this->get_logger(), "  Width: %d", fmt.fmt.pix.width);
-    RCLCPP_INFO(this->get_logger(), "  Height: %d", fmt.fmt.pix.height);
-    RCLCPP_INFO(this->get_logger(), "  Pixel Format: YUYV");
+    RCLCPP_DEBUG(this->get_logger(), "Set camera format:");
+    RCLCPP_DEBUG(this->get_logger(), "  Width: %d", fmt.fmt.pix.width);
+    RCLCPP_DEBUG(this->get_logger(), "  Height: %d", fmt.fmt.pix.height);
+    RCLCPP_DEBUG(this->get_logger(), "  Pixel Format: YUYV");
 
     struct v4l2_streamparm streamparm = {};
     streamparm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -150,7 +148,7 @@ bool ArmCameraDriver::init_camera() {
         return false;
     }
 
-    RCLCPP_INFO(this->get_logger(), "Set frame rate: %d fps", fps_);
+    RCLCPP_DEBUG(this->get_logger(), "Set frame rate: %d fps", fps_);
 
     // Request buffers
     struct v4l2_requestbuffers req = {};
@@ -163,7 +161,7 @@ bool ArmCameraDriver::init_camera() {
         return false;
     }
 
-    RCLCPP_INFO(this->get_logger(), "Requested %d buffers", req.count);
+    RCLCPP_DEBUG(this->get_logger(), "Requested %d buffers", req.count);
 
     // Map buffers
     for (unsigned int i = 0; i < req.count; i++) {
@@ -183,7 +181,7 @@ bool ArmCameraDriver::init_camera() {
             return false;
         }
         buffers_[i].length = buf.length;
-        RCLCPP_INFO(this->get_logger(), "Mapped buffer %d: %u bytes", i, static_cast<unsigned int>(buf.length));
+        RCLCPP_DEBUG(this->get_logger(), "Mapped buffer %d: %u bytes", i, static_cast<unsigned int>(buf.length));
     }
 
     // Queue buffers
@@ -206,7 +204,7 @@ bool ArmCameraDriver::init_camera() {
         return false;
     }
 
-    RCLCPP_INFO(this->get_logger(), "Camera streaming started");
+    RCLCPP_DEBUG(this->get_logger(), "Camera streaming started");
     return true;
 }
 

@@ -149,7 +149,7 @@ MainCameraDriver::~MainCameraDriver()
 
 bool MainCameraDriver::initializeCamera()
 {
-  RCLCPP_INFO(this->get_logger(), "Initializing main camera...");
+  RCLCPP_DEBUG(this->get_logger(), "Initializing main camera...");
   
   // Check if device exists
   if (!std::filesystem::exists(camera_device_)) {
@@ -159,7 +159,7 @@ bool MainCameraDriver::initializeCamera()
 
   // Create GStreamer pipeline
   std::string pipeline = createGStreamerPipeline();
-  RCLCPP_INFO(this->get_logger(), "GStreamer pipeline: %s", pipeline.c_str());
+  RCLCPP_DEBUG(this->get_logger(), "GStreamer pipeline: %s", pipeline.c_str());
 
   // Open camera with GStreamer backend
   cap_.open(pipeline, cv::CAP_GSTREAMER);
@@ -174,9 +174,9 @@ bool MainCameraDriver::initializeCamera()
   int actual_height = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_HEIGHT));
   double actual_fps = cap_.get(cv::CAP_PROP_FPS);
   
-  RCLCPP_INFO(this->get_logger(), "Camera opened successfully:");
-  RCLCPP_INFO(this->get_logger(), "  Actual resolution: %dx%d", actual_width, actual_height);
-  RCLCPP_INFO(this->get_logger(), "  Actual FPS: %.1f", actual_fps);
+  RCLCPP_DEBUG(this->get_logger(), "Camera opened successfully:");
+  RCLCPP_DEBUG(this->get_logger(), "  Actual resolution: %dx%d", actual_width, actual_height);
+  RCLCPP_DEBUG(this->get_logger(), "  Actual FPS: %.1f", actual_fps);
 
   if (actual_width != capture_width_ || actual_height != capture_height_) {
     RCLCPP_WARN(this->get_logger(), 
@@ -192,10 +192,10 @@ bool MainCameraDriver::initializeCamera()
     if (enable_auto_exposure_ && !disable_auto_exposure_) {
       auto_exposure_controller_.initialize(exposure_min_, exposure_max_, 
                                          target_brightness_, ae_kp_);
-      RCLCPP_INFO(this->get_logger(), "Auto exposure controller initialized:");
-      RCLCPP_INFO(this->get_logger(), "  Target brightness: %.1f", target_brightness_);
-      RCLCPP_INFO(this->get_logger(), "  Proportional gain: Kp=%.2f", ae_kp_);
-      RCLCPP_INFO(this->get_logger(), "  Update interval: every %d frames (%.1f Hz)", 
+      RCLCPP_DEBUG(this->get_logger(), "Auto exposure controller initialized:");
+      RCLCPP_DEBUG(this->get_logger(), "  Target brightness: %.1f", target_brightness_);
+      RCLCPP_DEBUG(this->get_logger(), "  Proportional gain: Kp=%.2f", ae_kp_);
+      RCLCPP_DEBUG(this->get_logger(), "  Update interval: every %d frames (%.1f Hz)", 
                   auto_exposure_update_interval_, fps_ / auto_exposure_update_interval_);
     }
     // Apply parameter settings if specified
@@ -203,19 +203,19 @@ bool MainCameraDriver::initializeCamera()
       // Use manual mode for either manual control or custom auto exposure
       if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL)) {
         if (enable_auto_exposure_) {
-          RCLCPP_INFO(this->get_logger(), "Disabled camera auto exposure (Manual Mode for custom AE)");
+          RCLCPP_DEBUG(this->get_logger(), "Disabled camera auto exposure (Manual Mode for custom AE)");
         } else {
-          RCLCPP_INFO(this->get_logger(), "Disabled auto exposure (Manual Mode)");
+          RCLCPP_DEBUG(this->get_logger(), "Disabled auto exposure (Manual Mode)");
         }
       }
     } else {
       // Use camera's built-in auto exposure
       if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_APERTURE_PRIORITY)) {
-        RCLCPP_INFO(this->get_logger(), "Enabled camera auto exposure (Aperture Priority Mode)");
+        RCLCPP_DEBUG(this->get_logger(), "Enabled camera auto exposure (Aperture Priority Mode)");
         // Reset gain to default when switching to auto-exposure
         if (setV4L2Control(V4L2_CID_GAIN, default_gain_param_)) {
           current_gain_ = default_gain_param_;
-          RCLCPP_INFO(this->get_logger(), "Reset gain to default: %d", default_gain_param_);
+          RCLCPP_DEBUG(this->get_logger(), "Reset gain to default: %d", default_gain_param_);
         }
       }
     }
@@ -223,14 +223,14 @@ bool MainCameraDriver::initializeCamera()
     if (exposure_setting_ >= 0) {
       if (setV4L2Control(V4L2_CID_EXPOSURE_ABSOLUTE, exposure_setting_)) {
         current_exposure_ = exposure_setting_;
-        RCLCPP_INFO(this->get_logger(), "Set exposure to %d", exposure_setting_);
+        RCLCPP_DEBUG(this->get_logger(), "Set exposure to %d", exposure_setting_);
       }
     }
     
     if (gain_setting_ >= 0) {
       if (setV4L2Control(V4L2_CID_GAIN, gain_setting_)) {
         current_gain_ = gain_setting_;
-        RCLCPP_INFO(this->get_logger(), "Set gain to %d", gain_setting_);
+        RCLCPP_DEBUG(this->get_logger(), "Set gain to %d", gain_setting_);
       }
     }
   }
@@ -253,7 +253,7 @@ std::string MainCameraDriver::createGStreamerPipeline()
 
 bool MainCameraDriver::initializeV4L2Controls()
 {
-  RCLCPP_INFO(this->get_logger(), "Initializing V4L2 controls...");
+  RCLCPP_DEBUG(this->get_logger(), "Initializing V4L2 controls...");
   
   // Open camera device for control access
   camera_fd_ = open(camera_device_.c_str(), O_RDWR);
@@ -269,7 +269,7 @@ bool MainCameraDriver::initializeV4L2Controls()
   if (ioctl(camera_fd_, VIDIOC_QUERYCTRL, &qctrl) == 0) {
     exposure_min_ = qctrl.minimum;
     exposure_max_ = qctrl.maximum;
-    RCLCPP_INFO(this->get_logger(), "Exposure range: %d - %d", exposure_min_, exposure_max_);
+    RCLCPP_DEBUG(this->get_logger(), "Exposure range: %d - %d", exposure_min_, exposure_max_);
   } else {
     RCLCPP_WARN(this->get_logger(), "Failed to query exposure control");
     exposure_min_ = 1;
@@ -281,7 +281,7 @@ bool MainCameraDriver::initializeV4L2Controls()
   if (ioctl(camera_fd_, VIDIOC_QUERYCTRL, &qctrl) == 0) {
     gain_min_ = qctrl.minimum;
     gain_max_ = qctrl.maximum;
-    RCLCPP_INFO(this->get_logger(), "Gain range: %d - %d", gain_min_, gain_max_);
+    RCLCPP_DEBUG(this->get_logger(), "Gain range: %d - %d", gain_min_, gain_max_);
   } else {
     RCLCPP_WARN(this->get_logger(), "Failed to query gain control");
     gain_min_ = 0;
@@ -292,10 +292,10 @@ bool MainCameraDriver::initializeV4L2Controls()
   current_exposure_ = getV4L2Control(V4L2_CID_EXPOSURE_ABSOLUTE);
   current_gain_ = getV4L2Control(V4L2_CID_GAIN);
   
-  RCLCPP_INFO(this->get_logger(), "Current exposure: %d, gain: %d", current_exposure_, current_gain_);
+  RCLCPP_DEBUG(this->get_logger(), "Current exposure: %d, gain: %d", current_exposure_, current_gain_);
   
   v4l2_controls_initialized_ = true;
-  RCLCPP_INFO(this->get_logger(), "V4L2 controls initialized successfully");
+  RCLCPP_DEBUG(this->get_logger(), "V4L2 controls initialized successfully");
   
   return true;
 }
