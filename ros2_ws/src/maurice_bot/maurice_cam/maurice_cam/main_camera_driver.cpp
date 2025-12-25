@@ -1,4 +1,4 @@
-#include "maurice_cam/camera_driver.hpp"
+#include "maurice_cam/main_camera_driver.hpp"
 #include <filesystem>
 
 using namespace std::chrono_literals;
@@ -6,8 +6,8 @@ using namespace std::chrono_literals;
 namespace maurice_cam
 {
 
-CameraDriver::CameraDriver()
-: Node("camera_driver")
+MainCameraDriver::MainCameraDriver()
+: Node("main_camera_driver")
 {
   // Declare parameters with defaults
   this->declare_parameter<std::string>("camera_symlink", "usb-3D_USB_Camera_3D_USB_Camera_01.00.00-video-index0");
@@ -72,7 +72,7 @@ CameraDriver::CameraDriver()
   left_width_ = capture_width_ / 2;
   left_height_ = capture_height_;
 
-  RCLCPP_INFO(this->get_logger(), "=== Maurice Camera Driver ===");
+  RCLCPP_INFO(this->get_logger(), "=== Maurice Main Camera Driver ===");
   RCLCPP_INFO(this->get_logger(), "Camera symlink: %s", camera_symlink.c_str());
   RCLCPP_INFO(this->get_logger(), "Resolved device: %s", camera_device_.c_str());
   RCLCPP_INFO(this->get_logger(), "Stereo resolution: %dx%d", capture_width_, capture_height_);
@@ -112,18 +112,18 @@ CameraDriver::CameraDriver()
     
     // Start frame processing thread
     frame_thread_running_ = true;
-    frame_thread_ = std::thread(&CameraDriver::frameProcessingLoop, this);
+    frame_thread_ = std::thread(&MainCameraDriver::frameProcessingLoop, this);
     
-    RCLCPP_INFO(this->get_logger(), "Camera driver initialized successfully");
+    RCLCPP_INFO(this->get_logger(), "Main camera driver initialized successfully");
   } else {
-    RCLCPP_ERROR(this->get_logger(), "Failed to initialize camera");
-    throw std::runtime_error("Camera initialization failed");
+    RCLCPP_ERROR(this->get_logger(), "Failed to initialize main camera");
+    throw std::runtime_error("Main camera initialization failed");
   }
 }
 
-CameraDriver::~CameraDriver()
+MainCameraDriver::~MainCameraDriver()
 {
-  RCLCPP_INFO(this->get_logger(), "Shutting down camera driver...");
+  RCLCPP_INFO(this->get_logger(), "Shutting down main camera driver...");
   
   // Stop frame processing thread
   if (frame_thread_running_) {
@@ -144,12 +144,12 @@ CameraDriver::~CameraDriver()
     camera_fd_ = -1;
   }
   
-  RCLCPP_INFO(this->get_logger(), "Camera driver shutdown complete");
+  RCLCPP_INFO(this->get_logger(), "Main camera driver shutdown complete");
 }
 
-bool CameraDriver::initializeCamera()
+bool MainCameraDriver::initializeCamera()
 {
-  RCLCPP_INFO(this->get_logger(), "Initializing camera...");
+  RCLCPP_INFO(this->get_logger(), "Initializing main camera...");
   
   // Check if device exists
   if (!std::filesystem::exists(camera_device_)) {
@@ -238,7 +238,7 @@ bool CameraDriver::initializeCamera()
   return true;
 }
 
-std::string CameraDriver::createGStreamerPipeline()
+std::string MainCameraDriver::createGStreamerPipeline()
 {
   // Use MJPG format for better performance with this camera
   std::string pipeline = 
@@ -251,7 +251,7 @@ std::string CameraDriver::createGStreamerPipeline()
   return pipeline;
 }
 
-bool CameraDriver::initializeV4L2Controls()
+bool MainCameraDriver::initializeV4L2Controls()
 {
   RCLCPP_INFO(this->get_logger(), "Initializing V4L2 controls...");
   
@@ -300,7 +300,7 @@ bool CameraDriver::initializeV4L2Controls()
   return true;
 }
 
-bool CameraDriver::setV4L2Control(int control_id, int value)
+bool MainCameraDriver::setV4L2Control(int control_id, int value)
 {
   if (camera_fd_ == -1) {
     RCLCPP_WARN(this->get_logger(), "Camera file descriptor not open");
@@ -320,7 +320,7 @@ bool CameraDriver::setV4L2Control(int control_id, int value)
   return true;
 }
 
-int CameraDriver::getV4L2Control(int control_id)
+int MainCameraDriver::getV4L2Control(int control_id)
 {
   if (camera_fd_ == -1) {
     RCLCPP_WARN(this->get_logger(), "Camera file descriptor not open");
@@ -339,12 +339,11 @@ int CameraDriver::getV4L2Control(int control_id)
   return ctrl.value;
 }
 
-void CameraDriver::frameProcessingLoop()
+void MainCameraDriver::frameProcessingLoop()
 {
   RCLCPP_INFO(this->get_logger(), "Frame processing loop started");
   
   cv::Mat frame;
-  auto last_stats_time = std::chrono::high_resolution_clock::now();
   
   while (frame_thread_running_ && rclcpp::ok()) {
     try {
@@ -361,26 +360,17 @@ void CameraDriver::frameProcessingLoop()
       // Increment frame counter
       frame_count_++;
       
+      // Log every 1000 frames for health monitoring (~33 seconds at 30 fps)
+      if (frame_count_ % 1000 == 0) {
+        RCLCPP_INFO(this->get_logger(), "Camera health check - Frame %d, Device: %s", 
+                    frame_count_.load(), camera_device_.c_str());
+      }
+      
       // Process and publish frame
       processAndPublishFrame(frame);
       
       // Update statistics
       updateFrameStats();
-      
-      // Print periodic statistics
-      auto current_time = std::chrono::high_resolution_clock::now();
-      auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-        current_time - last_stats_time).count();
-      
-      if (elapsed >= 5) {  // Print stats every 5 seconds
-        RCLCPP_INFO(this->get_logger(), 
-          "Captured %d frames in %ld seconds (avg: %.1f fps)",
-          frame_count_.load(), elapsed, 
-          static_cast<double>(frame_count_.load()) / elapsed);
-        
-        frame_count_ = 0;
-        last_stats_time = current_time;
-      }
       
     } catch (const std::exception& e) {
       RCLCPP_ERROR(this->get_logger(), "Error in frame processing: %s", e.what());
@@ -391,7 +381,7 @@ void CameraDriver::frameProcessingLoop()
   RCLCPP_INFO(this->get_logger(), "Frame processing loop ended");
 }
 
-void CameraDriver::processAndPublishFrame(const cv::Mat& frame)
+void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
 {
   auto current_time = this->now();
   
@@ -466,7 +456,7 @@ void CameraDriver::processAndPublishFrame(const cv::Mat& frame)
   stereo_pub_->publish(stereo_ros_image);
 }
 
-void CameraDriver::applyAutoExposure(const cv::Mat& frame)
+void MainCameraDriver::applyAutoExposure(const cv::Mat& frame)
 {
   // Calculate new exposure value using PID controller
   int new_exposure = auto_exposure_controller_.calculateExposure(frame, current_exposure_);
@@ -480,7 +470,7 @@ void CameraDriver::applyAutoExposure(const cv::Mat& frame)
   }
 }
 
-void CameraDriver::updateFrameStats()
+void MainCameraDriver::updateFrameStats()
 {
   auto current_time = this->now();
   frame_timestamps_.push_back(current_time);
@@ -498,7 +488,7 @@ void CameraDriver::updateFrameStats()
   }
 }
 
-void CameraDriver::printFrameStats()
+void MainCameraDriver::printFrameStats()
 {
   if (frame_timestamps_.size() < 2) {
     return;
@@ -631,7 +621,7 @@ int main(int argc, char** argv)
   rclcpp::init(argc, argv);
   
   try {
-    auto node = std::make_shared<maurice_cam::CameraDriver>();
+    auto node = std::make_shared<maurice_cam::MainCameraDriver>();
     rclcpp::spin(node);
   } catch (const std::exception& e) {
     RCLCPP_ERROR(rclcpp::get_logger("main"), "Exception: %s", e.what());
@@ -641,3 +631,4 @@ int main(int argc, char** argv)
   rclcpp::shutdown();
   return 0;
 }
+

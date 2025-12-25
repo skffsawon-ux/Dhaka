@@ -80,23 +80,23 @@ private:
 };
 
 /**
- * @brief GStreamer-based camera driver node for Maurice robot
+ * @brief GStreamer-based main camera driver node for Maurice robot
  * 
- * This node provides a clean interface to capture frames from a USB camera
+ * This node provides a clean interface to capture frames from the main USB camera
  * using GStreamer pipeline and publishes both raw and compressed images.
  */
-class CameraDriver : public rclcpp::Node
+class MainCameraDriver : public rclcpp::Node
 {
 public:
   /**
    * @brief Constructor
    */
-  CameraDriver();
+  MainCameraDriver();
 
   /**
    * @brief Destructor
    */
-  ~CameraDriver();
+  ~MainCameraDriver();
 
 private:
   /**
@@ -213,3 +213,4 @@ private:
 };
 
 } // namespace maurice_cam
+

@@ -22,19 +22,29 @@ set(PYTHON_VERSION "python3.10")
 # Include directories
 include_directories(include)
 
-# Create C++ camera driver executable
-add_executable(camera_driver maurice_cam/camera_driver.cpp)
-ament_target_dependencies(camera_driver 
+# Create main camera driver executable
+add_executable(main_camera_driver maurice_cam/main_camera_driver.cpp)
+ament_target_dependencies(main_camera_driver 
   rclcpp 
   sensor_msgs
   cv_bridge
   image_transport
 )
-target_link_libraries(camera_driver ${OpenCV_LIBS})
+target_link_libraries(main_camera_driver ${OpenCV_LIBS})
 
-# Install C++ executable
+# Create arm camera driver executable
+add_executable(arm_camera_driver maurice_cam/arm_camera_driver.cpp)
+ament_target_dependencies(arm_camera_driver 
+  rclcpp 
+  sensor_msgs
+  cv_bridge
+)
+target_link_libraries(arm_camera_driver ${OpenCV_LIBS})
+
+# Install C++ executables
 install(TARGETS
-  camera_driver
+  main_camera_driver
+  arm_camera_driver
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -42,6 +52,7 @@ install(TARGETS
 install(
   DIRECTORY maurice_cam/
   DESTINATION lib/${PYTHON_VERSION}/site-packages/maurice_cam
+  PATTERN "*.cpp" EXCLUDE
 )
 
 # Install launch files

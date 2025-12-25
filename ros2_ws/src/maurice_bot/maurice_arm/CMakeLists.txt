@@ -28,20 +28,6 @@ find_package(maurice_msgs REQUIRED)
 # Include directories
 include_directories(include)
 
-# Add C++ executables
-add_executable(camera_node maurice_arm/camera.cpp)
-
-# Link camera_node dependencies
-ament_target_dependencies(camera_node
-  rclcpp
-  sensor_msgs
-  cv_bridge
-)
-
-target_link_libraries(camera_node
-  ${OpenCV_LIBS}
-)
-
 # Add arm node (dynamixel + robot + arm with head)
 add_executable(arm
   maurice_arm/dynamixel.cpp
@@ -70,7 +56,6 @@ target_include_directories(arm PUBLIC
 
 # Install C++ executables
 install(TARGETS
-  camera_node
   arm
   DESTINATION lib/${PROJECT_NAME}
 )
