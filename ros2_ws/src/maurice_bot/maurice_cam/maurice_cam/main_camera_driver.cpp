@@ -368,17 +368,14 @@ void MainCameraDriver::frameProcessingLoop()
       // Increment frame counter
       frame_count_++;
       
-      // Log every 1000 frames for health monitoring (~33 seconds at 30 fps)
-      if (frame_count_ % 1000 == 0) {
-        RCLCPP_INFO(this->get_logger(), "Camera health check - Frame %d, Device: %s", 
-                    frame_count_.load(), camera_device_.c_str());
-      }
-      
       // Process and publish frame
       processAndPublishFrame(frame);
       
-      // Update statistics
+      // Update statistics and log every 1000 frames (~33 seconds at 30 fps)
       updateFrameStats();
+      if (frame_count_ % 1000 == 0) {
+        printFrameStats();
+      }
       
     } catch (const std::exception& e) {
       RCLCPP_ERROR(this->get_logger(), "Error in frame processing: %s", e.what());
@@ -524,12 +521,6 @@ void MainCameraDriver::updateFrameStats()
   auto one_second_ago = current_time - rclcpp::Duration::from_nanoseconds(1000000000);
   while (!frame_timestamps_.empty() && frame_timestamps_.front() < one_second_ago) {
     frame_timestamps_.pop_front();
-  }
-  
-  // Print detailed stats every 10 seconds
-  if ((current_time - last_stats_print_).seconds() >= 10.0) {
-    printFrameStats();
-    last_stats_print_ = current_time;
   }
 }
 
