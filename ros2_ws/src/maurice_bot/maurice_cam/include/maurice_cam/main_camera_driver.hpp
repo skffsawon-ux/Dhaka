@@ -16,7 +16,6 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
-#include "cv_bridge/cv_bridge.h"
 
 #include <opencv2/opencv.hpp>
 
@@ -210,6 +209,13 @@ private:
   // Statistics
   std::atomic<int> frame_count_{0};
   std::atomic<bool> camera_initialized_{false};
+
+  // Preallocated message buffers to avoid per-frame allocations
+  sensor_msgs::msg::Image stereo_msg_;
+  sensor_msgs::msg::Image left_msg_;
+  sensor_msgs::msg::CompressedImage left_compressed_msg_;
+  std::vector<int> jpeg_params_;
+  bool buffers_initialized_{false};
 };
 
 } // namespace maurice_cam

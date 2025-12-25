@@ -241,12 +241,16 @@ bool MainCameraDriver::initializeCamera()
 std::string MainCameraDriver::createGStreamerPipeline()
 {
   // Use MJPG format for better performance with this camera
+  // appsink properties:
+  //   max-buffers=1  - Only keep 1 frame in queue (always get newest)
+  //   drop=true      - Drop old frames if queue is full (prevents memory buildup)
+  //   sync=false     - Don't sync to clock (process as fast as possible)
   std::string pipeline = 
     "v4l2src device=" + camera_device_ + " ! "
     "image/jpeg,width=" + std::to_string(capture_width_) + 
     ",height=" + std::to_string(capture_height_) + 
     ",framerate=" + std::to_string(static_cast<int>(fps_)) + "/1 ! "
-    "jpegdec ! videoconvert ! appsink";
+    "jpegdec ! videoconvert ! appsink max-buffers=1 drop=true sync=false";
   
   return pipeline;
 }
@@ -385,75 +389,106 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
 {
   auto current_time = this->now();
   
-  // Extract left half of the stereo image (left camera only)
-  cv::Mat left_frame = frame(cv::Rect(0, 0, left_width_, left_height_)).clone();
-  
-  // Apply auto exposure control if enabled
+  // Apply auto exposure control BEFORE rotation (using ROI view, no clone)
   if (enable_auto_exposure_ && !disable_auto_exposure_ && v4l2_controls_initialized_) {
     frame_counter_++;
     if (frame_counter_ >= auto_exposure_update_interval_) {
-      applyAutoExposure(left_frame);
+      // Use a view into the original frame's left half (no copy)
+      cv::Mat left_roi_for_ae = frame(cv::Rect(0, 0, left_width_, left_height_));
+      applyAutoExposure(left_roi_for_ae);
       frame_counter_ = 0;
     }
   }
   
-  // Rotate the left image 180 degrees
-  cv::rotate(left_frame, left_frame, cv::ROTATE_180);
+  // -------------------------
+  // One-time buffer initialization (reuse buffers to avoid per-frame allocations)
+  // -------------------------
+  if (!buffers_initialized_) {
+    // Stereo message buffer
+    stereo_msg_.header.frame_id = frame_id_;
+    stereo_msg_.height = capture_height_;
+    stereo_msg_.width = capture_width_;
+    stereo_msg_.encoding = "bgr8";
+    stereo_msg_.is_bigendian = false;
+    stereo_msg_.step = capture_width_ * 3;
+    stereo_msg_.data.resize(stereo_msg_.height * stereo_msg_.step);
+    
+    // Left message buffer
+    left_msg_.header.frame_id = frame_id_;
+    left_msg_.height = left_height_;
+    left_msg_.width = left_width_;
+    left_msg_.encoding = "bgr8";
+    left_msg_.is_bigendian = false;
+    left_msg_.step = left_width_ * 3;
+    left_msg_.data.resize(left_msg_.height * left_msg_.step);
+    
+    // Compressed message format
+    left_compressed_msg_.format = "jpeg";
+    
+    // JPEG encoding params (reuse)
+    jpeg_params_ = {
+      cv::IMWRITE_JPEG_QUALITY, jpeg_quality_,
+      cv::IMWRITE_JPEG_OPTIMIZE, 0
+    };
+    
+    buffers_initialized_ = true;
+    RCLCPP_DEBUG(this->get_logger(), "Preallocated message buffers initialized");
+  }
   
-  // Create and publish left camera raw image message
-  sensor_msgs::msg::Image left_ros_image;
-  left_ros_image.header.stamp = current_time;
-  left_ros_image.header.frame_id = frame_id_;
-  left_ros_image.height = left_frame.rows;
-  left_ros_image.width = left_frame.cols;
-  left_ros_image.encoding = "bgr8";
-  left_ros_image.is_bigendian = false;
-  left_ros_image.step = left_frame.cols * left_frame.channels();
+  // -------------------------
+  // (A1) Stereo msg: rotate once directly into ROS buffer (no clone, no memcpy)
+  // -------------------------
+  stereo_msg_.header.stamp = current_time;
   
-  // Copy left image data
-  size_t left_data_size = left_frame.total() * left_frame.elemSize();
-  left_ros_image.data.resize(left_data_size);
-  std::memcpy(left_ros_image.data.data(), left_frame.data, left_data_size);
+  // Wrap the ROS message data buffer as a cv::Mat view
+  cv::Mat stereo_out(
+    capture_height_, capture_width_, CV_8UC3,
+    stereo_msg_.data.data(),
+    stereo_msg_.step
+  );
   
-  // Publish left camera raw image
-  image_pub_->publish(left_ros_image);
-  
-  // Create and publish left camera compressed image message
-  sensor_msgs::msg::CompressedImage left_compressed_msg;
-  left_compressed_msg.header = left_ros_image.header;
-  left_compressed_msg.format = "jpeg";
-  
-  // Compress left image with specified quality
-  std::vector<int> params = {
-    cv::IMWRITE_JPEG_QUALITY, jpeg_quality_,
-    cv::IMWRITE_JPEG_OPTIMIZE, 0
-  };
-  cv::imencode(".jpg", left_frame, left_compressed_msg.data, params);
-  
-  // Publish left camera compressed image
-  compressed_pub_->publish(left_compressed_msg);
-  
-  // Create full stereo image (rotated 180 degrees)
-  cv::Mat stereo_frame = frame.clone();
-  cv::rotate(stereo_frame, stereo_frame, cv::ROTATE_180);
-  
-  // Create and publish stereo image message
-  sensor_msgs::msg::Image stereo_ros_image;
-  stereo_ros_image.header.stamp = current_time;
-  stereo_ros_image.header.frame_id = frame_id_;
-  stereo_ros_image.height = stereo_frame.rows;
-  stereo_ros_image.width = stereo_frame.cols;
-  stereo_ros_image.encoding = "bgr8";
-  stereo_ros_image.is_bigendian = false;
-  stereo_ros_image.step = stereo_frame.cols * stereo_frame.channels();
-  
-  // Copy stereo image data
-  size_t stereo_data_size = stereo_frame.total() * stereo_frame.elemSize();
-  stereo_ros_image.data.resize(stereo_data_size);
-  std::memcpy(stereo_ros_image.data.data(), stereo_frame.data, stereo_data_size);
+  // Rotate directly INTO the stereo ROS buffer
+  cv::rotate(frame, stereo_out, cv::ROTATE_180);
   
   // Publish stereo image
-  stereo_pub_->publish(stereo_ros_image);
+  stereo_pub_->publish(stereo_msg_);
+  
+  // -------------------------
+  // (A2) Left ROI view into rotated stereo (no clone)
+  // After 180° rotation, original left half appears on the right half.
+  // -------------------------
+  cv::Rect left_roi(left_width_, 0, left_width_, left_height_);
+  cv::Mat left_view = stereo_out(left_roi);  // View only, no copy
+  
+  // -------------------------
+  // (A3) Left raw msg: one unavoidable copy into its own ROS buffer
+  // -------------------------
+  left_msg_.header.stamp = current_time;
+  
+  // Wrap left ROS message buffer as cv::Mat view
+  cv::Mat left_out(
+    left_height_, left_width_, CV_8UC3,
+    left_msg_.data.data(),
+    left_msg_.step
+  );
+  
+  // Copy ROI into left message buffer (one unavoidable copy)
+  left_view.copyTo(left_out);
+  
+  // Publish left camera raw image
+  image_pub_->publish(left_msg_);
+  
+  // -------------------------
+  // (A4) Left compressed: encode from left_out (no extra clone)
+  // -------------------------
+  left_compressed_msg_.header.stamp = current_time;
+  left_compressed_msg_.header.frame_id = frame_id_;
+  
+  // Encode from the left buffer (reuses left_out cv::Mat view)
+  cv::imencode(".jpg", left_out, left_compressed_msg_.data, jpeg_params_);
+  
+  // Publish left camera compressed image
+  compressed_pub_->publish(left_compressed_msg_);
 }
 
 void MainCameraDriver::applyAutoExposure(const cv::Mat& frame)
