@@ -47,7 +47,8 @@ private:
   void destroy_subscriptions();
   void cleanup_pipeline();
   cv::Mat process_image(const sensor_msgs::msg::Image::SharedPtr& msg, int target_width, int target_height);
-  void push_frame(GstElement* appsrc, const cv::Mat& frame);
+  void push_frame(GstElement* appsrc, const cv::Mat& frame, GstBufferPool* pool);
+  GstBufferPool* create_frame_pool(int width, int height, int channels);
 
   // Publishers
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr offer_pub_;
@@ -65,6 +66,10 @@ private:
   GstElement* webrtc_;
   GstElement* appsrc_main_;
   GstElement* appsrc_arm_;
+
+  // Buffer pools for zero-alloc frame pushing
+  GstBufferPool* pool_main_;
+  GstBufferPool* pool_arm_;
 
   // Source mode (initialized early)
   std::string current_source_;

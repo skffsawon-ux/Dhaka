@@ -12,6 +12,8 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions & options)
   webrtc_(nullptr),
   appsrc_main_(nullptr),
   appsrc_arm_(nullptr),
+  pool_main_(nullptr),
+  pool_arm_(nullptr),
   current_source_("live"),
   camera_qos_(rclcpp::QoS(1).best_effort())
 {
@@ -127,57 +129,98 @@ cv::Mat WebRTCStreamer::process_image(
     return cv::Mat();
   }
 
-  // Convert to BGR if needed
-  cv::Mat bgr_img;
+  bool needs_resize = (img.rows != target_height || img.cols != target_width);
+
+  // Fast path: no conversion, no resize - return non-owning view
+  // Safe because msg stays alive until after memcpy into GstBuffer
+  if (conversion_code < 0 && !needs_resize) {
+    return img;
+  }
+
+  cv::Mat result;
   if (conversion_code >= 0) {
-    cv::cvtColor(img, bgr_img, conversion_code);
+    cv::cvtColor(img, result, conversion_code);
+    if (needs_resize) {
+      cv::resize(result, result, cv::Size(target_width, target_height));
+    }
   } else {
-    bgr_img = img.clone();
+    // No conversion but resize needed
+    cv::resize(img, result, cv::Size(target_width, target_height));
   }
 
-  // Resize if needed
-  if (bgr_img.rows != target_height || bgr_img.cols != target_width) {
-    cv::resize(bgr_img, bgr_img, cv::Size(target_width, target_height));
-  }
-
-  return bgr_img;
+  return result;
 }
 
-void WebRTCStreamer::push_frame(GstElement* appsrc, const cv::Mat& frame)
+GstBufferPool* WebRTCStreamer::create_frame_pool(int width, int height, int channels)
 {
-  if (!appsrc || frame.empty()) {
+  gsize frame_size = width * height * channels;
+
+  GstBufferPool* pool = gst_buffer_pool_new();
+  GstStructure* config = gst_buffer_pool_get_config(pool);
+
+  // Configure: no caps needed for raw data, size, 2-4 buffers is enough
+  gst_buffer_pool_config_set_params(config, nullptr, frame_size, 2, 4);
+
+  if (!gst_buffer_pool_set_config(pool, config)) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to configure buffer pool");
+    gst_object_unref(pool);
+    return nullptr;
+  }
+
+  if (!gst_buffer_pool_set_active(pool, TRUE)) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to activate buffer pool");
+    gst_object_unref(pool);
+    return nullptr;
+  }
+
+  return pool;
+}
+
+void WebRTCStreamer::push_frame(GstElement* appsrc, const cv::Mat& frame, GstBufferPool* pool)
+{
+  if (!appsrc || frame.empty() || !pool) {
     return;
   }
 
-  // Create GstBuffer from frame data
-  size_t size = frame.total() * frame.elemSize();
-  GstBuffer* buffer = gst_buffer_new_allocate(nullptr, size, nullptr);
-  
+  // Acquire buffer from pool (no allocation!)
+  GstBuffer* buffer = nullptr;
+  GstFlowReturn flow = gst_buffer_pool_acquire_buffer(pool, &buffer, nullptr);
+  if (flow != GST_FLOW_OK || !buffer) {
+    return;
+  }
+
+  // Copy frame data
   GstMapInfo map;
   gst_buffer_map(buffer, &map, GST_MAP_WRITE);
+  size_t size = frame.total() * frame.elemSize();
   memcpy(map.data, frame.data, size);
   gst_buffer_unmap(buffer, &map);
 
   // Push buffer to appsrc
   GstFlowReturn ret;
   g_signal_emit_by_name(appsrc, "push-buffer", buffer, &ret);
-  gst_buffer_unref(buffer);
+  gst_buffer_unref(buffer);  // Returns to pool
 }
 
 void WebRTCStreamer::on_image_main(const sensor_msgs::msg::Image::SharedPtr msg)
 {
   GstElement* appsrc = nullptr;
+  GstBufferPool* pool = nullptr;
   {
     std::lock_guard<std::mutex> lock(pipeline_mutex_);
     appsrc = appsrc_main_;
+    pool = pool_main_;
     if (appsrc) gst_object_ref(appsrc);
   }
 
-  if (!appsrc) return;
+  if (!appsrc || !pool) {
+    if (appsrc) gst_object_unref(appsrc);
+    return;
+  }
 
   cv::Mat img = process_image(msg, 640, 480);
   if (!img.empty()) {
-    push_frame(appsrc, img);
+    push_frame(appsrc, img, pool);
   }
 
   gst_object_unref(appsrc);
@@ -186,17 +229,22 @@ void WebRTCStreamer::on_image_main(const sensor_msgs::msg::Image::SharedPtr msg)
 void WebRTCStreamer::on_image_arm(const sensor_msgs::msg::Image::SharedPtr msg)
 {
   GstElement* appsrc = nullptr;
+  GstBufferPool* pool = nullptr;
   {
     std::lock_guard<std::mutex> lock(pipeline_mutex_);
     appsrc = appsrc_arm_;
+    pool = pool_arm_;
     if (appsrc) gst_object_ref(appsrc);
   }
 
-  if (!appsrc) return;
+  if (!appsrc || !pool) {
+    if (appsrc) gst_object_unref(appsrc);
+    return;
+  }
 
   cv::Mat img = process_image(msg, 640, 480);
   if (!img.empty()) {
-    push_frame(appsrc, img);
+    push_frame(appsrc, img, pool);
   }
 
   gst_object_unref(appsrc);
@@ -205,7 +253,19 @@ void WebRTCStreamer::on_image_arm(const sensor_msgs::msg::Image::SharedPtr msg)
 void WebRTCStreamer::cleanup_pipeline()
 {
   std::lock_guard<std::mutex> lock(pipeline_mutex_);
-  
+
+  // Deactivate and release pools
+  if (pool_main_) {
+    gst_buffer_pool_set_active(pool_main_, FALSE);
+    gst_object_unref(pool_main_);
+    pool_main_ = nullptr;
+  }
+  if (pool_arm_) {
+    gst_buffer_pool_set_active(pool_arm_, FALSE);
+    gst_object_unref(pool_arm_);
+    pool_arm_ = nullptr;
+  }
+
   if (pipeline_) {
     RCLCPP_INFO(this->get_logger(), "Cleaning up pipeline...");
     gst_element_set_state(pipeline_, GST_STATE_NULL);
@@ -277,6 +337,10 @@ void WebRTCStreamer::on_start(const std_msgs::msg::String::SharedPtr msg)
   appsrc_main_ = gst_bin_get_by_name(GST_BIN(pipeline_), "src_main");
   appsrc_arm_ = gst_bin_get_by_name(GST_BIN(pipeline_), "src_arm");
   webrtc_ = gst_bin_get_by_name(GST_BIN(pipeline_), "webrtc");
+
+  // Create buffer pools (640x480 BGR = 921600 bytes per frame)
+  pool_main_ = create_frame_pool(640, 480, 3);
+  pool_arm_ = create_frame_pool(640, 480, 3);
 
   // Configure appsrc elements
   g_object_set(appsrc_main_, "format", GST_FORMAT_TIME, "do-timestamp", TRUE, "is-live", TRUE, nullptr);
