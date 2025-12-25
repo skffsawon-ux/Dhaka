@@ -10,10 +10,10 @@ def generate_launch_description():
             name='webrtc_streamer',
             output='screen',
             parameters=[{
-                'live_main_camera_topic': '/mars/main_camera/image/compressed',
-                'live_arm_camera_topic': '/mars/arm/image_raw/compressed',
-                'replay_main_camera_topic': '/brain/recorder/replay/main_camera/compressed',
-                'replay_arm_camera_topic': '/brain/recorder/replay/arm_camera/compressed',
+                'live_main_camera_topic': '/mars/main_camera/image',
+                'live_arm_camera_topic': '/mars/arm/image_raw',
+                'replay_main_camera_topic': '/brain/recorder/replay/main_camera/image',
+                'replay_arm_camera_topic': '/brain/recorder/replay/arm_camera/image_raw',
             }]
         )
     ])

@@ -19,10 +19,10 @@ WebRTCStreamer::WebRTCStreamer()
   gst_init(nullptr, nullptr);
 
   // Declare parameters
-  this->declare_parameter("live_main_camera_topic", "/mars/main_camera/image/compressed");
-  this->declare_parameter("live_arm_camera_topic", "/mars/arm/image_raw/compressed");
-  this->declare_parameter("replay_main_camera_topic", "/brain/recorder/replay/main_camera/compressed");
-  this->declare_parameter("replay_arm_camera_topic", "/brain/recorder/replay/arm_camera/compressed");
+  this->declare_parameter("live_main_camera_topic", "/mars/main_camera/image");
+  this->declare_parameter("live_arm_camera_topic", "/mars/arm/image_raw");
+  this->declare_parameter("replay_main_camera_topic", "/brain/recorder/replay/main_camera/image");
+  this->declare_parameter("replay_arm_camera_topic", "/brain/recorder/replay/arm_camera/image_raw");
 
   // Get parameters
   live_main_topic_ = this->get_parameter("live_main_camera_topic").as_string();
@@ -79,11 +79,11 @@ void WebRTCStreamer::create_subscriptions(const std::string& source)
     arm_topic = live_arm_topic_;
   }
 
-  image_sub_main_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
+  image_sub_main_ = this->create_subscription<sensor_msgs::msg::Image>(
     main_topic, camera_qos_,
     std::bind(&WebRTCStreamer::on_image_main, this, std::placeholders::_1));
 
-  image_sub_arm_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
+  image_sub_arm_ = this->create_subscription<sensor_msgs::msg::Image>(
     arm_topic, camera_qos_,
     std::bind(&WebRTCStreamer::on_image_arm, this, std::placeholders::_1));
 
@@ -93,24 +93,54 @@ void WebRTCStreamer::create_subscriptions(const std::string& source)
 }
 
 cv::Mat WebRTCStreamer::process_image(
-  const sensor_msgs::msg::CompressedImage::SharedPtr& msg,
+  const sensor_msgs::msg::Image::SharedPtr& msg,
   int target_width, int target_height)
 {
-  // Decode compressed image
-  cv::Mat img = cv::imdecode(cv::Mat(msg->data), cv::IMREAD_COLOR);
+  // Create cv::Mat from raw image data
+  int cv_type = CV_8UC3;  // Default to 3-channel 8-bit
+  int conversion_code = -1;
+
+  if (msg->encoding == "rgb8") {
+    cv_type = CV_8UC3;
+    conversion_code = -1;  // No conversion needed, already RGB
+  } else if (msg->encoding == "bgr8") {
+    cv_type = CV_8UC3;
+    conversion_code = cv::COLOR_BGR2RGB;
+  } else if (msg->encoding == "mono8") {
+    cv_type = CV_8UC1;
+    conversion_code = cv::COLOR_GRAY2RGB;
+  } else if (msg->encoding == "rgba8") {
+    cv_type = CV_8UC4;
+    conversion_code = cv::COLOR_RGBA2RGB;
+  } else if (msg->encoding == "bgra8") {
+    cv_type = CV_8UC4;
+    conversion_code = cv::COLOR_BGRA2RGB;
+  } else {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+      "Unsupported image encoding: %s, assuming bgr8", msg->encoding.c_str());
+    cv_type = CV_8UC3;
+    conversion_code = cv::COLOR_BGR2RGB;
+  }
+
+  cv::Mat img(msg->height, msg->width, cv_type, const_cast<uint8_t*>(msg->data.data()), msg->step);
   if (img.empty()) {
     return cv::Mat();
   }
 
-  // Convert BGR to RGB
-  cv::cvtColor(img, img, cv::COLOR_BGR2RGB);
-
-  // Resize if needed
-  if (img.rows != target_height || img.cols != target_width) {
-    cv::resize(img, img, cv::Size(target_width, target_height));
+  // Convert to RGB if needed
+  cv::Mat rgb_img;
+  if (conversion_code >= 0) {
+    cv::cvtColor(img, rgb_img, conversion_code);
+  } else {
+    rgb_img = img.clone();
   }
 
-  return img;
+  // Resize if needed
+  if (rgb_img.rows != target_height || rgb_img.cols != target_width) {
+    cv::resize(rgb_img, rgb_img, cv::Size(target_width, target_height));
+  }
+
+  return rgb_img;
 }
 
 void WebRTCStreamer::push_frame(GstElement* appsrc, const cv::Mat& frame)
@@ -134,7 +164,7 @@ void WebRTCStreamer::push_frame(GstElement* appsrc, const cv::Mat& frame)
   gst_buffer_unref(buffer);
 }
 
-void WebRTCStreamer::on_image_main(const sensor_msgs::msg::CompressedImage::SharedPtr msg)
+void WebRTCStreamer::on_image_main(const sensor_msgs::msg::Image::SharedPtr msg)
 {
   std::lock_guard<std::mutex> lock(pipeline_mutex_);
   if (!appsrc_main_) {
@@ -147,7 +177,7 @@ void WebRTCStreamer::on_image_main(const sensor_msgs::msg::CompressedImage::Shar
   }
 }
 
-void WebRTCStreamer::on_image_arm(const sensor_msgs::msg::CompressedImage::SharedPtr msg)
+void WebRTCStreamer::on_image_arm(const sensor_msgs::msg::Image::SharedPtr msg)
 {
   std::lock_guard<std::mutex> lock(pipeline_mutex_);
   if (!appsrc_arm_) {
