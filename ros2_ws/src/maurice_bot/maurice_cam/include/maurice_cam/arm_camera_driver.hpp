@@ -1,9 +1,9 @@
 #pragma once
 
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
-#include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
 #include <linux/videodev2.h>
 #include <fcntl.h>
@@ -30,8 +30,9 @@ class ArmCameraDriver : public rclcpp::Node
 public:
   /**
    * @brief Constructor
+   * @param options Node options for component composition
    */
-  ArmCameraDriver();
+  explicit ArmCameraDriver(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
   /**
    * @brief Destructor

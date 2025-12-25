@@ -6,8 +6,8 @@
 namespace maurice_cam
 {
 
-WebRTCStreamer::WebRTCStreamer()
-: Node("webrtc_streamer"),
+WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions & options)
+: Node("webrtc_streamer", options),
   pipeline_(nullptr),
   webrtc_(nullptr),
   appsrc_main_(nullptr),
@@ -75,7 +75,7 @@ void WebRTCStreamer::create_subscriptions(const std::string& source)
     main_topic = replay_main_topic_;
     arm_topic = replay_arm_topic_;
   } else {
-    main_topic = live_main_topic_;
+    main_topic = live_mhain_topic_;
     arm_topic = live_arm_topic_;
   }
 
@@ -426,6 +426,10 @@ void WebRTCStreamer::on_ice_gathering_state_changed(GstElement* webrtc, GParamSp
 
 }  // namespace maurice_cam
 
+// Register the component
+RCLCPP_COMPONENTS_REGISTER_NODE(maurice_cam::WebRTCStreamer)
+
+#ifndef BUILDING_COMPONENT_LIBRARY
 int main(int argc, char* argv[])
 {
   rclcpp::init(argc, argv);
@@ -434,4 +438,5 @@ int main(int argc, char* argv[])
   rclcpp::shutdown();
   return 0;
 }
+#endif
 

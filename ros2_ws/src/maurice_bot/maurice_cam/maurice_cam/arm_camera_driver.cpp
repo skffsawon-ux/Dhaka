@@ -6,8 +6,9 @@ using namespace std::chrono_literals;
 namespace maurice_cam
 {
 
-ArmCameraDriver::ArmCameraDriver() : Node("arm_camera_driver"), 
-                   invalid_buffer_index_count_(0) {
+ArmCameraDriver::ArmCameraDriver(const rclcpp::NodeOptions & options) 
+  : Node("arm_camera_driver", options), 
+    invalid_buffer_index_count_(0) {
     RCLCPP_DEBUG(this->get_logger(), "Initializing arm camera driver...");
     RCLCPP_DEBUG(this->get_logger(), "OpenCV version: %s", CV_VERSION);
 
@@ -335,22 +336,34 @@ void ArmCameraDriver::capture_and_publish() {
             RCLCPP_ERROR(this->get_logger(), "Invalid converted image (idx=%u)", buf.index);
             // Don't return here, still need to requeue buffer
         } else {
-            // Create and publish messages (only if image is valid)
-            auto img_msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", bgr).toImageMsg();
-            img_msg->header.stamp = this->now();
+            auto stamp = this->now();
+            
+            // Create raw image message as UniquePtr for zero-copy intra-process
+            auto img_msg = std::make_unique<sensor_msgs::msg::Image>();
+            img_msg->header.stamp = stamp;
             img_msg->header.frame_id = "arm_camera";
-            image_pub_->publish(*img_msg);
+            img_msg->height = bgr.rows;
+            img_msg->width = bgr.cols;
+            img_msg->encoding = "bgr8";
+            img_msg->is_bigendian = false;
+            img_msg->step = bgr.cols * 3;
+            img_msg->data.assign(bgr.data, bgr.data + (bgr.rows * img_msg->step));
 
-            // Create and publish compressed image message
-            sensor_msgs::msg::CompressedImage compressed_msg;
-            compressed_msg.header = img_msg->header;
-            compressed_msg.format = "jpeg";
+            // Create compressed image message as UniquePtr for zero-copy
+            auto compressed_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+            compressed_msg->header.stamp = stamp;
+            compressed_msg->header.frame_id = "arm_camera";
+            compressed_msg->format = "jpeg";
 
             std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};
-            if (!cv::imencode(".jpg", bgr, compressed_msg.data, params)) {
+            if (!cv::imencode(".jpg", bgr, compressed_msg->data, params)) {
                 RCLCPP_ERROR(this->get_logger(), "Failed to compress image to JPEG");
             }
-            compressed_pub_->publish(compressed_msg);
+
+            // Publish with std::move() for zero-copy intra-process communication
+            // Inter-process subscribers (via DDS) still receive serialized copies automatically
+            image_pub_->publish(std::move(img_msg));
+            compressed_pub_->publish(std::move(compressed_msg));
 
             // Debug level for successful operations
             RCLCPP_DEBUG(this->get_logger(), "Successfully processed frame %d, buffer idx %u", frame_count, buf.index);
@@ -372,6 +385,10 @@ void ArmCameraDriver::capture_and_publish() {
 
 } // namespace maurice_cam
 
+// Register the component
+RCLCPP_COMPONENTS_REGISTER_NODE(maurice_cam::ArmCameraDriver)
+
+#ifndef BUILDING_COMPONENT_LIBRARY
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<maurice_cam::ArmCameraDriver>();
@@ -379,4 +396,5 @@ int main(int argc, char** argv) {
     rclcpp::shutdown();
     return 0;
 }
+#endif
 

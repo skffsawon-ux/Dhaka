@@ -9,9 +9,9 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 
 # Find OpenCV
@@ -34,25 +34,83 @@ set(PYTHON_VERSION "python3.10")
 # Include directories
 include_directories(include)
 
-# Create main camera driver executable
-add_executable(main_camera_driver maurice_cam/main_camera_driver.cpp)
-ament_target_dependencies(main_camera_driver 
+# =============================================================================
+# COMPONENT LIBRARIES (for composition / intra-process communication)
+# =============================================================================
+
+# Main camera driver component library
+add_library(main_camera_driver_component SHARED maurice_cam/main_camera_driver.cpp)
+target_compile_definitions(main_camera_driver_component PRIVATE BUILDING_COMPONENT_LIBRARY)
+target_include_directories(main_camera_driver_component PRIVATE ${TURBOJPEG_INCLUDE_DIRS})
+target_link_libraries(main_camera_driver_component ${OpenCV_LIBS} ${TURBOJPEG_LIBRARIES})
+ament_target_dependencies(main_camera_driver_component 
   rclcpp 
+  rclcpp_components
   sensor_msgs
-  cv_bridge
   image_transport
 )
+rclcpp_components_register_nodes(main_camera_driver_component "maurice_cam::MainCameraDriver")
+
+# Arm camera driver component library
+add_library(arm_camera_driver_component SHARED maurice_cam/arm_camera_driver.cpp)
+target_compile_definitions(arm_camera_driver_component PRIVATE BUILDING_COMPONENT_LIBRARY)
+target_link_libraries(arm_camera_driver_component ${OpenCV_LIBS})
+ament_target_dependencies(arm_camera_driver_component 
+  rclcpp 
+  rclcpp_components
+  sensor_msgs
+)
+rclcpp_components_register_nodes(arm_camera_driver_component "maurice_cam::ArmCameraDriver")
+
+# WebRTC streamer component library
+add_library(webrtc_streamer_component SHARED maurice_cam/webrtc_streamer.cpp)
+target_compile_definitions(webrtc_streamer_component PRIVATE BUILDING_COMPONENT_LIBRARY)
+target_include_directories(webrtc_streamer_component PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${GSTREAMER_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
+)
+target_link_libraries(webrtc_streamer_component
+  ${GSTREAMER_LIBRARIES}
+  ${OpenCV_LIBS}
+)
+if(nlohmann_json_FOUND)
+  target_link_libraries(webrtc_streamer_component nlohmann_json::nlohmann_json)
+elseif(NLOHMANN_JSON_FOUND)
+  target_include_directories(webrtc_streamer_component PUBLIC ${NLOHMANN_JSON_INCLUDE_DIRS})
+endif()
+ament_target_dependencies(webrtc_streamer_component
+  rclcpp
+  rclcpp_components
+  std_msgs
+  sensor_msgs
+)
+rclcpp_components_register_nodes(webrtc_streamer_component "maurice_cam::WebRTCStreamer")
+
+# =============================================================================
+# STANDALONE EXECUTABLES (for running nodes individually)
+# =============================================================================
+
+# Create main camera driver executable
+add_executable(main_camera_driver maurice_cam/main_camera_driver.cpp)
 target_include_directories(main_camera_driver PRIVATE ${TURBOJPEG_INCLUDE_DIRS})
 target_link_libraries(main_camera_driver ${OpenCV_LIBS} ${TURBOJPEG_LIBRARIES})
+ament_target_dependencies(main_camera_driver 
+  rclcpp 
+  rclcpp_components
+  sensor_msgs
+  image_transport
+)
 
 # Create arm camera driver executable
 add_executable(arm_camera_driver maurice_cam/arm_camera_driver.cpp)
+target_link_libraries(arm_camera_driver ${OpenCV_LIBS})
 ament_target_dependencies(arm_camera_driver 
   rclcpp 
+  rclcpp_components
   sensor_msgs
-  cv_bridge
 )
-target_link_libraries(arm_camera_driver ${OpenCV_LIBS})
 
 # Create WebRTC streamer executable
 add_executable(webrtc_streamer_node maurice_cam/webrtc_streamer.cpp)
@@ -73,8 +131,23 @@ elseif(NLOHMANN_JSON_FOUND)
 endif()
 ament_target_dependencies(webrtc_streamer_node
   rclcpp
+  rclcpp_components
   std_msgs
   sensor_msgs
+)
+
+# =============================================================================
+# INSTALLATION
+# =============================================================================
+
+# Install component libraries
+install(TARGETS
+  main_camera_driver_component
+  arm_camera_driver_component
+  webrtc_streamer_component
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
 )
 
 # Install C++ executables

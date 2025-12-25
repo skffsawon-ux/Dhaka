@@ -6,8 +6,8 @@ using namespace std::chrono_literals;
 namespace maurice_cam
 {
 
-MainCameraDriver::MainCameraDriver()
-: Node("main_camera_driver")
+MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
+: Node("main_camera_driver", options)
 {
   // Declare parameters with defaults
   this->declare_parameter<std::string>("camera_symlink", "usb-3D_USB_Camera_3D_USB_Camera_01.00.00-video-index0");
@@ -402,57 +402,27 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
   }
   
   // -------------------------
-  // One-time buffer initialization (reuse buffers to avoid per-frame allocations)
+  // (A1) Stereo msg: Create UniquePtr for zero-copy intra-process transfer
   // -------------------------
-  if (!buffers_initialized_) {
-    // Stereo message buffer
-    stereo_msg_.header.frame_id = frame_id_;
-    stereo_msg_.height = capture_height_;
-    stereo_msg_.width = capture_width_;
-    stereo_msg_.encoding = "bgr8";
-    stereo_msg_.is_bigendian = false;
-    stereo_msg_.step = capture_width_ * 3;
-    stereo_msg_.data.resize(stereo_msg_.height * stereo_msg_.step);
-    
-    // Left message buffer
-    left_msg_.header.frame_id = frame_id_;
-    left_msg_.height = left_height_;
-    left_msg_.width = left_width_;
-    left_msg_.encoding = "bgr8";
-    left_msg_.is_bigendian = false;
-    left_msg_.step = left_width_ * 3;
-    left_msg_.data.resize(left_msg_.height * left_msg_.step);
-    
-    // Compressed message format
-    left_compressed_msg_.format = "jpeg";
-    
-    // JPEG encoding params (reuse)
-    jpeg_params_ = {
-      cv::IMWRITE_JPEG_QUALITY, jpeg_quality_,
-      cv::IMWRITE_JPEG_OPTIMIZE, 0
-    };
-    
-    buffers_initialized_ = true;
-    RCLCPP_DEBUG(this->get_logger(), "Preallocated message buffers initialized");
-  }
-  
-  // -------------------------
-  // (A1) Stereo msg: rotate once directly into ROS buffer (no clone, no memcpy)
-  // -------------------------
-  stereo_msg_.header.stamp = current_time;
+  auto stereo_msg = std::make_unique<sensor_msgs::msg::Image>();
+  stereo_msg->header.stamp = current_time;
+  stereo_msg->header.frame_id = frame_id_;
+  stereo_msg->height = capture_height_;
+  stereo_msg->width = capture_width_;
+  stereo_msg->encoding = "bgr8";
+  stereo_msg->is_bigendian = false;
+  stereo_msg->step = capture_width_ * 3;
+  stereo_msg->data.resize(stereo_msg->height * stereo_msg->step);
   
   // Wrap the ROS message data buffer as a cv::Mat view
   cv::Mat stereo_out(
     capture_height_, capture_width_, CV_8UC3,
-    stereo_msg_.data.data(),
-    stereo_msg_.step
+    stereo_msg->data.data(),
+    stereo_msg->step
   );
   
   // Rotate directly INTO the stereo ROS buffer
   cv::rotate(frame, stereo_out, cv::ROTATE_180);
-  
-  // Publish stereo image
-  stereo_pub_->publish(stereo_msg_);
   
   // -------------------------
   // (A2) Left ROI view into rotated stereo (no clone)
@@ -462,40 +432,52 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
   cv::Mat left_view = stereo_out(left_roi);  // View only, no copy
   
   // -------------------------
-  // (A3) Left raw msg: one unavoidable copy into its own ROS buffer
+  // (A3) Left raw msg: Create UniquePtr for zero-copy intra-process transfer
   // -------------------------
-  left_msg_.header.stamp = current_time;
+  auto left_msg = std::make_unique<sensor_msgs::msg::Image>();
+  left_msg->header.stamp = current_time;
+  left_msg->header.frame_id = frame_id_;
+  left_msg->height = left_height_;
+  left_msg->width = left_width_;
+  left_msg->encoding = "bgr8";
+  left_msg->is_bigendian = false;
+  left_msg->step = left_width_ * 3;
+  left_msg->data.resize(left_msg->height * left_msg->step);
   
   // Wrap left ROS message buffer as cv::Mat view
   cv::Mat left_out(
     left_height_, left_width_, CV_8UC3,
-    left_msg_.data.data(),
-    left_msg_.step
+    left_msg->data.data(),
+    left_msg->step
   );
   
   // Copy ROI into left message buffer (one unavoidable copy)
   left_view.copyTo(left_out);
   
-  // Publish left camera raw image
-  image_pub_->publish(left_msg_);
-  
   // -------------------------
-  // (A4) Left compressed: encode from left_out using TurboJPEG (no extra clone)
+  // (A4) Left compressed: Create UniquePtr for zero-copy intra-process transfer
   // -------------------------
-  left_compressed_msg_.header.stamp = current_time;
-  left_compressed_msg_.header.frame_id = frame_id_;
+  auto left_compressed_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+  left_compressed_msg->header.stamp = current_time;
+  left_compressed_msg->header.frame_id = frame_id_;
+  left_compressed_msg->format = "jpeg";
   
   // Encode from the left buffer using TurboJPEG for faster compression
   try {
-    jpeg_encoder_->encodeBGR(left_out, jpeg_quality_, left_compressed_msg_.data);
+    jpeg_encoder_->encodeBGR(left_out, jpeg_quality_, left_compressed_msg->data);
   } catch (const std::exception& e) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                          "JPEG turbo encode failed: %s", e.what());
     return;  // Skip publishing this frame
   }
   
-  // Publish left camera compressed image
-  compressed_pub_->publish(left_compressed_msg_);
+  // -------------------------
+  // Publish with std::move() for zero-copy intra-process communication
+  // Inter-process subscribers (via DDS) still receive serialized copies automatically
+  // -------------------------
+  stereo_pub_->publish(std::move(stereo_msg));
+  image_pub_->publish(std::move(left_msg));
+  compressed_pub_->publish(std::move(left_compressed_msg));
 }
 
 void MainCameraDriver::applyAutoExposure(const cv::Mat& frame)
@@ -652,6 +634,10 @@ void AutoExposureController::setTargetBrightness(double target)
 
 } // namespace maurice_cam
 
+// Register the component
+RCLCPP_COMPONENTS_REGISTER_NODE(maurice_cam::MainCameraDriver)
+
+#ifndef BUILDING_COMPONENT_LIBRARY
 int main(int argc, char** argv)
 {
   rclcpp::init(argc, argv);
@@ -667,4 +653,5 @@ int main(int argc, char** argv)
   rclcpp::shutdown();
   return 0;
 }
+#endif
 

@@ -4,6 +4,7 @@
 #define GST_USE_UNSTABLE_API
 
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_components/register_node_macro.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <sensor_msgs/msg/image.hpp>
 
@@ -24,7 +25,7 @@ namespace maurice_cam
 class WebRTCStreamer : public rclcpp::Node
 {
 public:
-  WebRTCStreamer();
+  explicit WebRTCStreamer(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
   ~WebRTCStreamer();
 
 private:

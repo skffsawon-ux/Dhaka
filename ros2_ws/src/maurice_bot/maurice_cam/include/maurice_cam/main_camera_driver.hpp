@@ -17,6 +17,7 @@
 #include <turbojpeg.h>
 
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp_components/register_node_macro.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
 
@@ -162,8 +163,9 @@ class MainCameraDriver : public rclcpp::Node
 public:
   /**
    * @brief Constructor
+   * @param options Node options for component composition
    */
-  MainCameraDriver();
+  explicit MainCameraDriver(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
   /**
    * @brief Destructor
@@ -282,13 +284,6 @@ private:
   // Statistics
   std::atomic<int> frame_count_{0};
   std::atomic<bool> camera_initialized_{false};
-
-  // Preallocated message buffers to avoid per-frame allocations
-  sensor_msgs::msg::Image stereo_msg_;
-  sensor_msgs::msg::Image left_msg_;
-  sensor_msgs::msg::CompressedImage left_compressed_msg_;
-  std::vector<int> jpeg_params_;
-  bool buffers_initialized_{false};
 
   // TurboJPEG encoder for faster JPEG compression
   std::unique_ptr<JpegTurboEncoder> jpeg_encoder_;

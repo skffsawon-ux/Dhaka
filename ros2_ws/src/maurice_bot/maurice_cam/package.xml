@@ -11,9 +11,9 @@
   <buildtool_depend>ament_cmake_python</buildtool_depend>
 
   <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
-  <depend>cv_bridge</depend>
   <depend>image_transport</depend>
   <depend>OpenCV</depend>
 
