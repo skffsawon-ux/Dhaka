@@ -1,9 +1,9 @@
-#include "innate_webrtc_streamer/webrtc_streamer.hpp"
+#include "maurice_cam/webrtc_streamer.hpp"
 
 #include <sstream>
 #include <algorithm>
 
-namespace innate_webrtc_streamer
+namespace maurice_cam
 {
 
 WebRTCStreamer::WebRTCStreamer()
@@ -394,13 +394,14 @@ void WebRTCStreamer::on_ice_gathering_state_changed(GstElement* webrtc, GParamSp
   RCLCPP_INFO(self->get_logger(), "ICE gathering: %s", state_str);
 }
 
-}  // namespace innate_webrtc_streamer
+}  // namespace maurice_cam
 
 int main(int argc, char* argv[])
 {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<innate_webrtc_streamer::WebRTCStreamer>();
+  auto node = std::make_shared<maurice_cam::WebRTCStreamer>();
   rclcpp::spin(node);
   rclcpp::shutdown();
   return 0;
 }
+

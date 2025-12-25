@@ -1,5 +1,5 @@
-#ifndef INNATE_WEBRTC_STREAMER__WEBRTC_STREAMER_HPP_
-#define INNATE_WEBRTC_STREAMER__WEBRTC_STREAMER_HPP_
+#ifndef MAURICE_CAM__WEBRTC_STREAMER_HPP_
+#define MAURICE_CAM__WEBRTC_STREAMER_HPP_
 
 #define GST_USE_UNSTABLE_API
 
@@ -18,7 +18,7 @@
 #include <memory>
 #include <mutex>
 
-namespace innate_webrtc_streamer
+namespace maurice_cam
 {
 
 class WebRTCStreamer : public rclcpp::Node
@@ -81,6 +81,7 @@ private:
   std::mutex pipeline_mutex_;
 };
 
-}  // namespace innate_webrtc_streamer
+}  // namespace maurice_cam
 
-#endif  // INNATE_WEBRTC_STREAMER__WEBRTC_STREAMER_HPP_
+#endif  // MAURICE_CAM__WEBRTC_STREAMER_HPP_
+

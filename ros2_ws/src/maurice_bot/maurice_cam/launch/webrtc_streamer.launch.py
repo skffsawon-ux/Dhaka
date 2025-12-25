@@ -5,7 +5,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     return LaunchDescription([
         Node(
-            package='innate_webrtc_streamer',
+            package='maurice_cam',
             executable='webrtc_streamer_node',
             name='webrtc_streamer',
             output='screen',
@@ -17,3 +17,4 @@ def generate_launch_description():
             }]
         )
     ])
+
