@@ -144,6 +144,61 @@ def generate_launch_description():
         description='Main camera auto exposure update interval (update every N frames, 3 = 10Hz for 30Hz camera)'
     )
 
+    # Stereo depth estimator parameters
+    launch_depth_estimator_arg = DeclareLaunchArgument(
+        'launch_depth_estimator',
+        default_value='true',
+        description='Launch the stereo depth estimator'
+    )
+    
+    depth_data_directory_arg = DeclareLaunchArgument(
+        'depth_data_directory',
+        default_value='/home/jetson1/innate-os/data',
+        description='Data directory containing calibration config'
+    )
+    
+    depth_stereo_topic_arg = DeclareLaunchArgument(
+        'depth_stereo_topic',
+        default_value='/mars/main_camera/stereo',
+        description='Input stereo image topic'
+    )
+    
+    depth_output_topic_arg = DeclareLaunchArgument(
+        'depth_output_topic',
+        default_value='/mars/main_camera/depth',
+        description='Output depth image topic'
+    )
+    
+    depth_disparity_topic_arg = DeclareLaunchArgument(
+        'depth_disparity_topic',
+        default_value='/mars/main_camera/disparity',
+        description='Output disparity image topic'
+    )
+    
+    depth_max_disparity_arg = DeclareLaunchArgument(
+        'depth_max_disparity',
+        default_value='64',
+        description='Maximum disparity for stereo matching'
+    )
+    
+    depth_publish_disparity_arg = DeclareLaunchArgument(
+        'depth_publish_disparity',
+        default_value='false',
+        description='Publish disparity visualization image'
+    )
+    
+    depth_stereo_width_arg = DeclareLaunchArgument(
+        'depth_stereo_width',
+        default_value='1280',
+        description='Expected stereo image width (full stereo, left+right)'
+    )
+    
+    depth_stereo_height_arg = DeclareLaunchArgument(
+        'depth_stereo_height',
+        default_value='480',
+        description='Expected stereo image height'
+    )
+
     # Arm camera parameters
     arm_camera_symlink_arg = DeclareLaunchArgument(
         'arm_camera_symlink',
@@ -249,6 +304,26 @@ def generate_launch_description():
         }],
         extra_arguments=[{'use_intra_process_comms': True}],
     )
+    
+    # Stereo depth estimator node
+    depth_estimator_node = ComposableNode(
+        package='maurice_cam',
+        plugin='maurice_cam::StereoDepthEstimator',
+        name='stereo_depth_estimator',
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'data_directory': LaunchConfiguration('depth_data_directory'),
+            'stereo_topic': LaunchConfiguration('depth_stereo_topic'),
+            'depth_topic': LaunchConfiguration('depth_output_topic'),
+            'disparity_topic': LaunchConfiguration('depth_disparity_topic'),
+            'frame_id': LaunchConfiguration('main_camera_frame_id'),
+            'max_disparity': LaunchConfiguration('depth_max_disparity'),
+            'publish_disparity': LaunchConfiguration('depth_publish_disparity'),
+            'stereo_width': LaunchConfiguration('depth_stereo_width'),
+            'stereo_height': LaunchConfiguration('depth_stereo_height'),
+        }],
+        extra_arguments=[{'use_intra_process_comms': True}],
+    )
 
     # Create the composable node container
     # All nodes run in the same process, enabling zero-copy intra-process communication
@@ -261,6 +336,7 @@ def generate_launch_description():
             main_camera_node,
             arm_camera_node,
             webrtc_node,
+            depth_estimator_node,
         ],
         output='screen',
         emulate_tty=True,
@@ -289,6 +365,16 @@ def generate_launch_description():
         main_camera_target_brightness_arg,
         main_camera_ae_kp_arg,
         main_camera_auto_exposure_update_interval_arg,
+        # Stereo depth estimator arguments
+        launch_depth_estimator_arg,
+        depth_data_directory_arg,
+        depth_stereo_topic_arg,
+        depth_output_topic_arg,
+        depth_disparity_topic_arg,
+        depth_max_disparity_arg,
+        depth_publish_disparity_arg,
+        depth_stereo_width_arg,
+        depth_stereo_height_arg,
         # Arm camera arguments
         arm_camera_symlink_arg,
         arm_camera_width_arg,

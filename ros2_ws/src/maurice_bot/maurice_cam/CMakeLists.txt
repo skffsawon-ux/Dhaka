@@ -22,10 +22,23 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
 pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0 gstreamer-webrtc-1.0 gstreamer-sdp-1.0)
 
-# Find nlohmann_json (for webrtc_streamer)
+# Find nlohmann_json (for webrtc_streamer and stereo_depth_estimator)
 find_package(nlohmann_json QUIET)
 if(NOT nlohmann_json_FOUND)
   pkg_check_modules(NLOHMANN_JSON nlohmann_json)
+endif()
+
+# Find VPI (NVIDIA Vision Programming Interface) for stereo depth estimation
+set(VPI_ROOT "/opt/nvidia/vpi3")
+find_path(VPI_INCLUDE_DIR vpi/VPI.h PATHS ${VPI_ROOT}/include)
+find_library(VPI_LIBRARY nvvpi PATHS ${VPI_ROOT}/lib64 ${VPI_ROOT}/lib)
+
+if(VPI_INCLUDE_DIR AND VPI_LIBRARY)
+  set(VPI_FOUND TRUE)
+  message(STATUS "Found VPI: ${VPI_LIBRARY}")
+else()
+  set(VPI_FOUND FALSE)
+  message(WARNING "VPI not found. Stereo depth estimator will not be built.")
 endif()
 
 # Set Python version
@@ -88,6 +101,25 @@ ament_target_dependencies(webrtc_streamer_component
 )
 rclcpp_components_register_nodes(webrtc_streamer_component "maurice_cam::WebRTCStreamer")
 
+# Stereo depth estimator component library (requires VPI)
+if(VPI_FOUND)
+  add_library(stereo_depth_estimator_component SHARED maurice_cam/stereo_depth_estimator.cpp)
+  target_compile_definitions(stereo_depth_estimator_component PRIVATE BUILDING_COMPONENT_LIBRARY)
+  target_include_directories(stereo_depth_estimator_component PRIVATE ${VPI_INCLUDE_DIR})
+  target_link_libraries(stereo_depth_estimator_component ${OpenCV_LIBS} ${VPI_LIBRARY})
+  if(nlohmann_json_FOUND)
+    target_link_libraries(stereo_depth_estimator_component nlohmann_json::nlohmann_json)
+  elseif(NLOHMANN_JSON_FOUND)
+    target_include_directories(stereo_depth_estimator_component PRIVATE ${NLOHMANN_JSON_INCLUDE_DIRS})
+  endif()
+  ament_target_dependencies(stereo_depth_estimator_component 
+    rclcpp 
+    rclcpp_components
+    sensor_msgs
+  )
+  rclcpp_components_register_nodes(stereo_depth_estimator_component "maurice_cam::StereoDepthEstimator")
+endif()
+
 # =============================================================================
 # STANDALONE EXECUTABLES (for running nodes individually)
 # =============================================================================
@@ -136,25 +168,54 @@ ament_target_dependencies(webrtc_streamer_node
   sensor_msgs
 )
 
+# Create stereo depth estimator executable (requires VPI)
+if(VPI_FOUND)
+  add_executable(stereo_depth_estimator maurice_cam/stereo_depth_estimator.cpp)
+  target_include_directories(stereo_depth_estimator PRIVATE ${VPI_INCLUDE_DIR})
+  target_link_libraries(stereo_depth_estimator ${OpenCV_LIBS} ${VPI_LIBRARY})
+  if(nlohmann_json_FOUND)
+    target_link_libraries(stereo_depth_estimator nlohmann_json::nlohmann_json)
+  elseif(NLOHMANN_JSON_FOUND)
+    target_include_directories(stereo_depth_estimator PRIVATE ${NLOHMANN_JSON_INCLUDE_DIRS})
+  endif()
+  ament_target_dependencies(stereo_depth_estimator
+    rclcpp
+    rclcpp_components
+    sensor_msgs
+  )
+endif()
+
 # =============================================================================
 # INSTALLATION
 # =============================================================================
 
 # Install component libraries
-install(TARGETS
+set(COMPONENT_LIBRARIES
   main_camera_driver_component
   arm_camera_driver_component
   webrtc_streamer_component
+)
+if(VPI_FOUND)
+  list(APPEND COMPONENT_LIBRARIES stereo_depth_estimator_component)
+endif()
+
+install(TARGETS ${COMPONENT_LIBRARIES}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
 
 # Install C++ executables
-install(TARGETS
+set(EXECUTABLE_TARGETS
   main_camera_driver
   arm_camera_driver
   webrtc_streamer_node
+)
+if(VPI_FOUND)
+  list(APPEND EXECUTABLE_TARGETS stereo_depth_estimator)
+endif()
+
+install(TARGETS ${EXECUTABLE_TARGETS}
   DESTINATION lib/${PROJECT_NAME}
 )
 
