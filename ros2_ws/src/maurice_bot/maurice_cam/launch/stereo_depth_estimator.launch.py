@@ -97,6 +97,55 @@ def generate_launch_description():
         default_value='5',
         description='Process 1 out of every N frames (1=all, 2=half rate, 5=6Hz from 30Hz, etc.)'
     )
+    
+    publish_pointcloud_arg = DeclareLaunchArgument(
+        'publish_pointcloud',
+        default_value='true',
+        description='Publish 3D point cloud from depth'
+    )
+    
+    pointcloud_topic_arg = DeclareLaunchArgument(
+        'pointcloud_topic',
+        default_value='/mars/main_camera/points',
+        description='Point cloud output topic'
+    )
+    
+    pointcloud_decimation_arg = DeclareLaunchArgument(
+        'pointcloud_decimation',
+        default_value='8',
+        description='Point cloud decimation (1=full, 2=half, 4=quarter, 8=1/8th resolution)'
+    )
+    
+    # Disparity filtering arguments
+    enable_disparity_filter_arg = DeclareLaunchArgument(
+        'enable_disparity_filter',
+        default_value='true',
+        description='Enable disparity filtering (median + bilateral)'
+    )
+    
+    median_filter_size_arg = DeclareLaunchArgument(
+        'median_filter_size',
+        default_value='5',
+        description='Median filter kernel size (0=disabled, 3/5/7). Removes outlier speckles.'
+    )
+    
+    bilateral_filter_size_arg = DeclareLaunchArgument(
+        'bilateral_filter_size',
+        default_value='5',
+        description='Bilateral filter kernel size (0=disabled, 3/5/7/9). Edge-preserving smoothing.'
+    )
+    
+    bilateral_sigma_space_arg = DeclareLaunchArgument(
+        'bilateral_sigma_space',
+        default_value='1.5',
+        description='Bilateral filter spatial sigma (larger = more spatial smoothing)'
+    )
+    
+    bilateral_sigma_color_arg = DeclareLaunchArgument(
+        'bilateral_sigma_color',
+        default_value='50.0',
+        description='Bilateral filter intensity sigma (larger = smoother across intensity boundaries)'
+    )
 
     # Common parameters for both modes
     node_parameters = [{
@@ -111,6 +160,14 @@ def generate_launch_description():
         'stereo_width': LaunchConfiguration('stereo_width'),
         'stereo_height': LaunchConfiguration('stereo_height'),
         'process_every_n_frames': LaunchConfiguration('process_every_n_frames'),
+        'publish_pointcloud': LaunchConfiguration('publish_pointcloud'),
+        'pointcloud_topic': LaunchConfiguration('pointcloud_topic'),
+        'pointcloud_decimation': LaunchConfiguration('pointcloud_decimation'),
+        'enable_disparity_filter': LaunchConfiguration('enable_disparity_filter'),
+        'median_filter_size': LaunchConfiguration('median_filter_size'),
+        'bilateral_filter_size': LaunchConfiguration('bilateral_filter_size'),
+        'bilateral_sigma_space': LaunchConfiguration('bilateral_sigma_space'),
+        'bilateral_sigma_color': LaunchConfiguration('bilateral_sigma_color'),
     }]
 
     # Standalone node (default)
@@ -158,6 +215,14 @@ def generate_launch_description():
         stereo_width_arg,
         stereo_height_arg,
         process_every_n_frames_arg,
+        publish_pointcloud_arg,
+        pointcloud_topic_arg,
+        pointcloud_decimation_arg,
+        enable_disparity_filter_arg,
+        median_filter_size_arg,
+        bilateral_filter_size_arg,
+        bilateral_sigma_space_arg,
+        bilateral_sigma_color_arg,
         # Nodes (one will be active based on use_composable)
         standalone_node,
         composable_container,

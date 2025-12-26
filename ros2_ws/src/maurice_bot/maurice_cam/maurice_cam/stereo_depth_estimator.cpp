@@ -30,6 +30,16 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("stereo_width", 1280);
   this->declare_parameter<int>("stereo_height", 480);
   this->declare_parameter<int>("process_every_n_frames", 1);  // 1 = process every frame
+  this->declare_parameter<bool>("publish_pointcloud", true);
+  this->declare_parameter<std::string>("pointcloud_topic", "/mars/main_camera/points");
+  this->declare_parameter<int>("pointcloud_decimation", 2);  // 2 = half resolution point cloud
+  
+  // Disparity filtering parameters
+  this->declare_parameter<bool>("enable_disparity_filter", true);
+  this->declare_parameter<int>("median_filter_size", 5);      // 0=disabled, 3/5/7
+  this->declare_parameter<int>("bilateral_filter_size", 5);   // 0=disabled, 3/5/7/9
+  this->declare_parameter<double>("bilateral_sigma_space", 1.5);
+  this->declare_parameter<double>("bilateral_sigma_color", 50.0);
 
   // Get parameter values
   data_directory_ = this->get_parameter("data_directory").as_string();
@@ -43,6 +53,16 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   stereo_height_ = this->get_parameter("stereo_height").as_int();
   process_every_n_frames_ = this->get_parameter("process_every_n_frames").as_int();
   if (process_every_n_frames_ < 1) process_every_n_frames_ = 1;
+  publish_pointcloud_ = this->get_parameter("publish_pointcloud").as_bool();
+  pointcloud_topic_ = this->get_parameter("pointcloud_topic").as_string();
+  pointcloud_decimation_ = this->get_parameter("pointcloud_decimation").as_int();
+  if (pointcloud_decimation_ < 1) pointcloud_decimation_ = 1;
+  
+  enable_disparity_filter_ = this->get_parameter("enable_disparity_filter").as_bool();
+  median_filter_size_ = this->get_parameter("median_filter_size").as_int();
+  bilateral_filter_size_ = this->get_parameter("bilateral_filter_size").as_int();
+  bilateral_sigma_space_ = static_cast<float>(this->get_parameter("bilateral_sigma_space").as_double());
+  bilateral_sigma_color_ = static_cast<float>(this->get_parameter("bilateral_sigma_color").as_double());
 
   // Calculate single image dimensions
   image_width_ = stereo_width_ / 2;
@@ -57,6 +77,11 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(this->get_logger(), "Max disparity: %d", max_disparity_);
   if (process_every_n_frames_ > 1) {
     RCLCPP_INFO(this->get_logger(), "Process rate: 1/%d frames", process_every_n_frames_);
+  }
+  if (enable_disparity_filter_) {
+    RCLCPP_INFO(this->get_logger(), "Disparity filtering: median=%d, bilateral=%d (sigma: %.1f, %.1f)",
+                median_filter_size_, bilateral_filter_size_, 
+                bilateral_sigma_space_, bilateral_sigma_color_);
   }
 
   // Find calibration config directory and load calibration
@@ -93,6 +118,15 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
       disparity_topic_,
       rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
     );
+  }
+
+  if (publish_pointcloud_) {
+    pointcloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+      pointcloud_topic_,
+      rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
+    );
+    RCLCPP_INFO(this->get_logger(), "Point cloud enabled: %s (decimation: %d)",
+                pointcloud_topic_.c_str(), pointcloud_decimation_);
   }
 
   // Create subscription with zero-copy intra-process communication
@@ -353,6 +387,20 @@ bool StereoDepthEstimator::initializeVPI()
                           VPI_BACKEND_CUDA | VPI_BACKEND_CPU, &vpi_confidence_);
   CHECK_VPI_STATUS(status, "Failed to create confidence image");
 
+  // Create filtered disparity buffers if filtering is enabled
+  if (enable_disparity_filter_ && (median_filter_size_ > 0 || bilateral_filter_size_ > 0)) {
+    status = vpiImageCreate(image_width_, image_height_, VPI_IMAGE_FORMAT_S16,
+                            VPI_BACKEND_CUDA | VPI_BACKEND_CPU, &vpi_disparity_filtered_);
+    CHECK_VPI_STATUS(status, "Failed to create filtered disparity image");
+
+    // Need temp buffer if we're doing both median and bilateral
+    if (median_filter_size_ > 0 && bilateral_filter_size_ > 0) {
+      status = vpiImageCreate(image_width_, image_height_, VPI_IMAGE_FORMAT_S16,
+                              VPI_BACKEND_CUDA | VPI_BACKEND_CPU, &vpi_disparity_temp_);
+      CHECK_VPI_STATUS(status, "Failed to create temp disparity image");
+    }
+  }
+
   // Create stereo disparity estimator payload
   VPIStereoDisparityEstimatorCreationParams stereo_params;
   vpiInitStereoDisparityEstimatorCreationParams(&stereo_params);
@@ -442,6 +490,8 @@ void StereoDepthEstimator::cleanupVPI()
   if (vpi_left_rectified_) vpiImageDestroy(vpi_left_rectified_);
   if (vpi_right_rectified_) vpiImageDestroy(vpi_right_rectified_);
   if (vpi_disparity_) vpiImageDestroy(vpi_disparity_);
+  if (vpi_disparity_filtered_) vpiImageDestroy(vpi_disparity_filtered_);
+  if (vpi_disparity_temp_) vpiImageDestroy(vpi_disparity_temp_);
   if (vpi_confidence_) vpiImageDestroy(vpi_confidence_);
 
   // Free warp maps
@@ -465,6 +515,8 @@ void StereoDepthEstimator::cleanupVPI()
   vpi_left_rectified_ = nullptr;
   vpi_right_rectified_ = nullptr;
   vpi_disparity_ = nullptr;
+  vpi_disparity_filtered_ = nullptr;
+  vpi_disparity_temp_ = nullptr;
   vpi_confidence_ = nullptr;
 }
 
@@ -614,12 +666,59 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
     return;
   }
 
+  // Apply disparity filtering (median → bilateral) on GPU
+  VPIImage disparity_to_use = vpi_disparity_;  // Points to final disparity to read
+  
+  if (enable_disparity_filter_) {
+    // Stage 1: Median filter (removes outlier speckles)
+    if (median_filter_size_ > 0 && vpi_disparity_filtered_) {
+      VPIImage median_input = vpi_disparity_;
+      VPIImage median_output = (bilateral_filter_size_ > 0 && vpi_disparity_temp_) 
+                               ? vpi_disparity_temp_ : vpi_disparity_filtered_;
+      
+      // MedianFilter signature: stream, backend, input, output, windowWidth, windowHeight, kernel, border
+      // Using nullptr kernel for standard median, VPI_BORDER_ZERO for border handling
+      status = vpiSubmitMedianFilter(vpi_stream_, VPI_BACKEND_CUDA,
+                                     median_input, median_output, 
+                                     median_filter_size_, median_filter_size_,  // width, height
+                                     nullptr,  // kernel (nullptr = standard median)
+                                     VPI_BORDER_ZERO);
+      if (status != VPI_SUCCESS) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                             "Median filter failed, using unfiltered disparity");
+      } else {
+        disparity_to_use = median_output;
+      }
+    }
+
+    // Stage 2: Bilateral filter (edge-preserving smoothing)
+    if (bilateral_filter_size_ > 0 && vpi_disparity_filtered_) {
+      VPIImage bilateral_input = (median_filter_size_ > 0 && vpi_disparity_temp_) 
+                                  ? vpi_disparity_temp_ : vpi_disparity_;
+      VPIImage bilateral_output = vpi_disparity_filtered_;
+      
+      // BilateralFilter signature: stream, backend, input, output, kernelSize, sigmaSpace, sigmaColor, border
+      status = vpiSubmitBilateralFilter(vpi_stream_, VPI_BACKEND_CUDA,
+                                        bilateral_input, bilateral_output,
+                                        bilateral_filter_size_,
+                                        bilateral_sigma_space_,
+                                        bilateral_sigma_color_,
+                                        VPI_BORDER_ZERO);
+      if (status != VPI_SUCCESS) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                             "Bilateral filter failed, using median-only disparity");
+      } else {
+        disparity_to_use = bilateral_output;
+      }
+    }
+  }
+
   // Synchronize and get results
   vpiStreamSync(vpi_stream_);
 
-  // Lock disparity image and convert to depth
+  // Lock disparity image (filtered or raw) and convert to depth
   VPIImageData disparity_data;
-  status = vpiImageLockData(vpi_disparity_, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &disparity_data);
+  status = vpiImageLockData(disparity_to_use, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &disparity_data);
   if (status != VPI_SUCCESS) {
     char vpi_err[256];
     vpiGetLastStatusMessage(vpi_err, sizeof(vpi_err));
@@ -698,7 +797,69 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
     }
   }
 
-  vpiImageUnlock(vpi_disparity_);
+  vpiImageUnlock(disparity_to_use);
+
+  // Generate and publish point cloud if enabled (before moving depth_msg)
+  if (publish_pointcloud_ && pointcloud_pub_) {
+    // Get camera intrinsics from P1 (rectified projection matrix)
+    const float fx = static_cast<float>(P1_.at<double>(0, 0));
+    const float fy = static_cast<float>(P1_.at<double>(1, 1));
+    const float cx = static_cast<float>(P1_.at<double>(0, 2));
+    const float cy = static_cast<float>(P1_.at<double>(1, 2));
+
+    // Calculate decimated dimensions
+    const int pc_width = image_width_ / pointcloud_decimation_;
+    const int pc_height = image_height_ / pointcloud_decimation_;
+    const int step = pointcloud_decimation_;
+
+    // Create point cloud message
+    auto cloud_msg = std::make_unique<sensor_msgs::msg::PointCloud2>();
+    cloud_msg->header.stamp = timestamp;
+    cloud_msg->header.frame_id = frame_id_;
+    cloud_msg->height = pc_height;
+    cloud_msg->width = pc_width;
+    cloud_msg->is_dense = false;
+    cloud_msg->is_bigendian = false;
+
+    // Define point cloud fields (x, y, z as float32)
+    sensor_msgs::PointCloud2Modifier modifier(*cloud_msg);
+    modifier.setPointCloud2FieldsByString(1, "xyz");
+    modifier.resize(pc_width * pc_height);
+
+    // Create iterators for x, y, z
+    sensor_msgs::PointCloud2Iterator<float> iter_x(*cloud_msg, "x");
+    sensor_msgs::PointCloud2Iterator<float> iter_y(*cloud_msg, "y");
+    sensor_msgs::PointCloud2Iterator<float> iter_z(*cloud_msg, "z");
+
+    // Get pointer to depth data (before we move it)
+    const uint16_t* depth_data = reinterpret_cast<const uint16_t*>(depth_msg->data.data());
+
+    // Convert depth to 3D points
+    for (int v = 0; v < pc_height; ++v) {
+      for (int u = 0; u < pc_width; ++u, ++iter_x, ++iter_y, ++iter_z) {
+        // Get depth at decimated position
+        int img_u = u * step;
+        int img_v = v * step;
+        uint16_t depth_mm = depth_data[img_v * image_width_ + img_u];
+
+        if (depth_mm > 0) {
+          // Convert to meters
+          float z = static_cast<float>(depth_mm) * 0.001f;
+          // Back-project to 3D (using pinhole camera model)
+          *iter_x = (static_cast<float>(img_u) - cx) * z / fx;
+          *iter_y = (static_cast<float>(img_v) - cy) * z / fy;
+          *iter_z = z;
+        } else {
+          // Invalid point
+          *iter_x = std::numeric_limits<float>::quiet_NaN();
+          *iter_y = std::numeric_limits<float>::quiet_NaN();
+          *iter_z = std::numeric_limits<float>::quiet_NaN();
+        }
+      }
+    }
+
+    pointcloud_pub_->publish(std::move(cloud_msg));
+  }
 
   // Publish depth
   depth_pub_->publish(std::move(depth_msg));

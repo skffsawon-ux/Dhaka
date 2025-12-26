@@ -7,6 +7,8 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "sensor_msgs/msg/image.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
+#include "sensor_msgs/point_cloud2_iterator.hpp"
 
 #include <opencv2/opencv.hpp>
 
@@ -16,6 +18,8 @@
 #include <vpi/algo/Remap.h>
 #include <vpi/algo/StereoDisparity.h>
 #include <vpi/algo/ConvertImageFormat.h>
+#include <vpi/algo/MedianFilter.h>
+#include <vpi/algo/BilateralFilter.h>
 #include <vpi/WarpMap.h>
 
 namespace maurice_cam
@@ -90,16 +94,27 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr stereo_sub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr disparity_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
 
   // Node parameters
   std::string data_directory_;
   std::string stereo_topic_;
   std::string depth_topic_;
   std::string disparity_topic_;
+  std::string pointcloud_topic_;
   std::string frame_id_;
   int max_disparity_;
   bool publish_disparity_;
+  bool publish_pointcloud_;
   int process_every_n_frames_;  // Process 1 out of every N frames
+  int pointcloud_decimation_;   // Decimate point cloud (1=full, 2=half, 4=quarter)
+
+  // Disparity filtering parameters
+  bool enable_disparity_filter_;    // Enable disparity filtering pipeline
+  int median_filter_size_;          // Median filter kernel size (0=disabled, 3/5/7)
+  int bilateral_filter_size_;       // Bilateral filter kernel size (0=disabled, 3/5/7/9)
+  float bilateral_sigma_space_;     // Bilateral spatial sigma
+  float bilateral_sigma_color_;     // Bilateral intensity sigma
 
   // Image dimensions
   int stereo_width_;   // Full stereo image width (left + right)
@@ -132,6 +147,8 @@ private:
   VPIImage vpi_left_rectified_{nullptr};
   VPIImage vpi_right_rectified_{nullptr};
   VPIImage vpi_disparity_{nullptr};
+  VPIImage vpi_disparity_filtered_{nullptr};  // For median/bilateral filtering
+  VPIImage vpi_disparity_temp_{nullptr};      // Temp buffer for filter chain
   VPIImage vpi_confidence_{nullptr};
 
   // VPI payloads
