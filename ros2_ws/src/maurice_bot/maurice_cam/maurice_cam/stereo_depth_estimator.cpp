@@ -40,6 +40,11 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("bilateral_filter_size", 5);   // 0=disabled, 3/5/7/9
   this->declare_parameter<double>("bilateral_sigma_space", 1.5);
   this->declare_parameter<double>("bilateral_sigma_color", 50.0);
+  
+  // Quality parameters (to match OpenCV SGBM quality)
+  this->declare_parameter<int>("confidence_threshold", 32768);  // 0-65535, reject below this
+  this->declare_parameter<int>("min_disparity_threshold", 32);  // Q10.5: 32 = 1 pixel disparity
+  this->declare_parameter<int>("window_size", 5);               // SGM window size (3-11, odd)
 
   // Get parameter values
   data_directory_ = this->get_parameter("data_directory").as_string();
@@ -586,78 +591,52 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
   cv::Mat left_img = stereo_frame(cv::Rect(0, 0, image_width_, image_height_));
   cv::Mat right_img = stereo_frame(cv::Rect(image_width_, 0, image_width_, image_height_));
 
-  // Wrap cv::Mat as VPI images for upload to GPU
-  VPIImage vpi_left_wrap = nullptr;
-  VPIImage vpi_right_wrap = nullptr;
   VPIStatus status;
 
-  // Determine format based on input channels
-  VPIImageFormat input_format = (stereo_frame.channels() == 3) ? VPI_IMAGE_FORMAT_BGR8 : VPI_IMAGE_FORMAT_U8;
+  // ===== HYBRID APPROACH: OpenCV rectification (accurate) + VPI stereo (fast) =====
+  
+  // Convert to grayscale on CPU
+  cv::Mat left_gray, right_gray;
+  if (stereo_frame.channels() == 3) {
+    cv::cvtColor(left_img, left_gray, cv::COLOR_BGR2GRAY);
+    cv::cvtColor(right_img, right_gray, cv::COLOR_BGR2GRAY);
+  } else {
+    left_gray = left_img;
+    right_gray = right_img;
+  }
 
-  status = vpiImageCreateWrapperOpenCVMat(left_img, input_format,
+  // Rectify using OpenCV (this works correctly with scaled calibration)
+  cv::Mat left_rect, right_rect;
+  cv::remap(left_gray, left_rect, map1_left_, map2_left_, cv::INTER_LINEAR);
+  cv::remap(right_gray, right_rect, map1_right_, map2_right_, cv::INTER_LINEAR);
+
+  // Wrap rectified images for VPI (they're already grayscale U8)
+  VPIImage vpi_left_wrap = nullptr;
+  VPIImage vpi_right_wrap = nullptr;
+
+  status = vpiImageCreateWrapperOpenCVMat(left_rect, VPI_IMAGE_FORMAT_U8,
                                            VPI_BACKEND_CUDA, &vpi_left_wrap);
   if (status != VPI_SUCCESS) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to wrap left image");
+    RCLCPP_ERROR(this->get_logger(), "Failed to wrap left rectified image");
     return;
   }
 
-  status = vpiImageCreateWrapperOpenCVMat(right_img, input_format,
+  status = vpiImageCreateWrapperOpenCVMat(right_rect, VPI_IMAGE_FORMAT_U8,
                                            VPI_BACKEND_CUDA, &vpi_right_wrap);
   if (status != VPI_SUCCESS) {
     vpiImageDestroy(vpi_left_wrap);
-    RCLCPP_ERROR(this->get_logger(), "Failed to wrap right image");
+    RCLCPP_ERROR(this->get_logger(), "Failed to wrap right rectified image");
     return;
   }
 
-  // Upload and convert to grayscale on GPU in one step
-  // VPI's ConvertImageFormat handles BGR8 → U8 (grayscale) on CUDA
-  status = vpiSubmitConvertImageFormat(vpi_stream_, VPI_BACKEND_CUDA,
-                                        vpi_left_wrap, vpi_left_gray_, nullptr);
-  if (status != VPI_SUCCESS) {
-    vpiImageDestroy(vpi_left_wrap);
-    vpiImageDestroy(vpi_right_wrap);
-    RCLCPP_ERROR(this->get_logger(), "Failed to convert left image");
-    return;
-  }
-
-  status = vpiSubmitConvertImageFormat(vpi_stream_, VPI_BACKEND_CUDA,
-                                        vpi_right_wrap, vpi_right_gray_, nullptr);
-  if (status != VPI_SUCCESS) {
-    vpiImageDestroy(vpi_left_wrap);
-    vpiImageDestroy(vpi_right_wrap);
-    RCLCPP_ERROR(this->get_logger(), "Failed to convert right image");
-    return;
-  }
-
-  // Rectify left image
-  status = vpiSubmitRemap(vpi_stream_, VPI_BACKEND_CUDA, remap_left_payload_,
-                          vpi_left_gray_, vpi_left_rectified_,
-                          VPI_INTERP_LINEAR, VPI_BORDER_ZERO, 0);
-  if (status != VPI_SUCCESS) {
-    vpiImageDestroy(vpi_left_wrap);
-    vpiImageDestroy(vpi_right_wrap);
-    RCLCPP_ERROR(this->get_logger(), "Failed to remap left image");
-    return;
-  }
-
-  // Rectify right image
-  status = vpiSubmitRemap(vpi_stream_, VPI_BACKEND_CUDA, remap_right_payload_,
-                          vpi_right_gray_, vpi_right_rectified_,
-                          VPI_INTERP_LINEAR, VPI_BORDER_ZERO, 0);
-  if (status != VPI_SUCCESS) {
-    vpiImageDestroy(vpi_left_wrap);
-    vpiImageDestroy(vpi_right_wrap);
-    RCLCPP_ERROR(this->get_logger(), "Failed to remap right image");
-    return;
-  }
-
-  // Compute stereo disparity
+  // Compute stereo disparity using VPI (GPU-accelerated SGM)
+  // Input: OpenCV-rectified images wrapped for VPI
   VPIStereoDisparityEstimatorParams stereo_params;
   vpiInitStereoDisparityEstimatorParams(&stereo_params);
   stereo_params.maxDisparity = max_disparity_;
 
   status = vpiSubmitStereoDisparityEstimator(vpi_stream_, VPI_BACKEND_CUDA, stereo_payload_,
-                                              vpi_left_rectified_, vpi_right_rectified_,
+                                              vpi_left_wrap, vpi_right_wrap,
                                               vpi_disparity_, vpi_confidence_, &stereo_params);
   if (status != VPI_SUCCESS) {
     vpiImageDestroy(vpi_left_wrap);

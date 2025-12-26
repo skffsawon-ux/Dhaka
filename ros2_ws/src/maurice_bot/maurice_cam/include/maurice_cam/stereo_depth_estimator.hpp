@@ -116,6 +116,11 @@ private:
   float bilateral_sigma_space_;     // Bilateral spatial sigma
   float bilateral_sigma_color_;     // Bilateral intensity sigma
 
+  // Quality parameters (to match OpenCV SGBM)
+  int confidence_threshold_;        // Reject pixels with confidence below this (0-65535)
+  int min_disparity_threshold_;     // Minimum disparity in Q10.5 (reject noise)
+  int window_size_;                 // SGM window size
+
   // Image dimensions
   int stereo_width_;   // Full stereo image width (left + right)
   int stereo_height_;  // Full stereo image height

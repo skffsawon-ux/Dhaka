@@ -185,6 +185,19 @@ if(VPI_FOUND)
   )
 endif()
 
+# Create CPU-based stereo depth estimator (OpenCV only, no VPI required)
+add_executable(stereo_depth_cpu maurice_cam/stereo_depth_cpu.cpp)
+target_link_libraries(stereo_depth_cpu ${OpenCV_LIBS})
+if(nlohmann_json_FOUND)
+  target_link_libraries(stereo_depth_cpu nlohmann_json::nlohmann_json)
+elseif(NLOHMANN_JSON_FOUND)
+  target_include_directories(stereo_depth_cpu PRIVATE ${NLOHMANN_JSON_INCLUDE_DIRS})
+endif()
+ament_target_dependencies(stereo_depth_cpu
+  rclcpp
+  sensor_msgs
+)
+
 # =============================================================================
 # INSTALLATION
 # =============================================================================
@@ -210,6 +223,7 @@ set(EXECUTABLE_TARGETS
   main_camera_driver
   arm_camera_driver
   webrtc_streamer_node
+  stereo_depth_cpu
 )
 if(VPI_FOUND)
   list(APPEND EXECUTABLE_TARGETS stereo_depth_estimator)
