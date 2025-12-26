@@ -40,6 +40,18 @@ def generate_launch_description():
         description='Camera pixel format'
     )
     
+    publish_compressed_arg = DeclareLaunchArgument(
+        'publish_compressed',
+        default_value='false',
+        description='Publish compressed image topic'
+    )
+    
+    compressed_frame_interval_arg = DeclareLaunchArgument(
+        'compressed_frame_interval',
+        default_value='5',
+        description='Publish compressed image every N frames'
+    )
+    
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time',
         default_value='false',
@@ -59,6 +71,8 @@ def generate_launch_description():
                 'height': LaunchConfiguration('height'),
                 'fps': LaunchConfiguration('fps'),
                 'pixel_format': LaunchConfiguration('pixel_format'),
+                'publish_compressed': LaunchConfiguration('publish_compressed'),
+                'compressed_frame_interval': LaunchConfiguration('compressed_frame_interval'),
                 'use_sim_time': LaunchConfiguration('use_sim_time')
             }
         ],
@@ -73,6 +87,8 @@ def generate_launch_description():
         height_arg,
         fps_arg,
         pixel_format_arg,
+        publish_compressed_arg,
+        compressed_frame_interval_arg,
         use_sim_time_arg,
         arm_camera_driver_node
     ])

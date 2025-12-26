@@ -46,6 +46,18 @@ def generate_launch_description():
         description='JPEG compression quality (1-100)'
     )
     
+    publish_compressed_arg = DeclareLaunchArgument(
+        'publish_compressed',
+        default_value='true',
+        description='Publish compressed image topic'
+    )
+    
+    compressed_frame_interval_arg = DeclareLaunchArgument(
+        'compressed_frame_interval',
+        default_value='3',
+        description='Publish compressed image every N frames'
+    )
+    
     # V4L2 control parameters
     exposure_arg = DeclareLaunchArgument(
         'exposure',
@@ -116,6 +128,8 @@ def generate_launch_description():
                 'fps': LaunchConfiguration('fps'),
                 'frame_id': LaunchConfiguration('frame_id'),
                 'jpeg_quality': LaunchConfiguration('jpeg_quality'),
+                'publish_compressed': LaunchConfiguration('publish_compressed'),
+                'compressed_frame_interval': LaunchConfiguration('compressed_frame_interval'),
                 'exposure': LaunchConfiguration('exposure'),
                 'gain': LaunchConfiguration('gain'),
                 'disable_auto_exposure': LaunchConfiguration('disable_auto_exposure'),
@@ -139,6 +153,8 @@ def generate_launch_description():
         fps_arg,
         frame_id_arg,
         jpeg_quality_arg,
+        publish_compressed_arg,
+        compressed_frame_interval_arg,
         exposure_arg,
         gain_arg,
         disable_auto_exposure_arg,

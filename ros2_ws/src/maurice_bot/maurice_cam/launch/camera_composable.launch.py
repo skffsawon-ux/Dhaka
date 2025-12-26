@@ -84,6 +84,18 @@ def generate_launch_description():
         description='Main camera JPEG compression quality (1-100)'
     )
     
+    main_camera_publish_compressed_arg = DeclareLaunchArgument(
+        'main_camera_publish_compressed',
+        default_value='true',
+        description='Main camera publish compressed image topic'
+    )
+    
+    main_camera_compressed_frame_interval_arg = DeclareLaunchArgument(
+        'main_camera_compressed_frame_interval',
+        default_value='3',
+        description='Main camera publish compressed image every N frames'
+    )
+    
     main_camera_exposure_arg = DeclareLaunchArgument(
         'main_camera_exposure',
         default_value='-1',
@@ -162,6 +174,18 @@ def generate_launch_description():
         default_value='YUYV',
         description='Arm camera pixel format'
     )
+    
+    arm_camera_publish_compressed_arg = DeclareLaunchArgument(
+        'arm_camera_publish_compressed',
+        default_value='false',
+        description='Arm camera publish compressed image topic'
+    )
+    
+    arm_camera_compressed_frame_interval_arg = DeclareLaunchArgument(
+        'arm_camera_compressed_frame_interval',
+        default_value='5',
+        description='Arm camera publish compressed image every N frames'
+    )
 
     # Build list of composable nodes based on launch arguments
     composable_nodes = []
@@ -179,6 +203,8 @@ def generate_launch_description():
             'fps': LaunchConfiguration('main_camera_fps'),
             'frame_id': LaunchConfiguration('main_camera_frame_id'),
             'jpeg_quality': LaunchConfiguration('main_camera_jpeg_quality'),
+            'publish_compressed': LaunchConfiguration('main_camera_publish_compressed'),
+            'compressed_frame_interval': LaunchConfiguration('main_camera_compressed_frame_interval'),
             'exposure': LaunchConfiguration('main_camera_exposure'),
             'gain': LaunchConfiguration('main_camera_gain'),
             'disable_auto_exposure': LaunchConfiguration('main_camera_disable_auto_exposure'),
@@ -203,6 +229,8 @@ def generate_launch_description():
             'height': LaunchConfiguration('arm_camera_height'),
             'fps': LaunchConfiguration('arm_camera_fps'),
             'pixel_format': LaunchConfiguration('arm_camera_pixel_format'),
+            'publish_compressed': LaunchConfiguration('arm_camera_publish_compressed'),
+            'compressed_frame_interval': LaunchConfiguration('arm_camera_compressed_frame_interval'),
         }],
         extra_arguments=[{'use_intra_process_comms': True}],
     )
@@ -251,6 +279,8 @@ def generate_launch_description():
         main_camera_fps_arg,
         main_camera_frame_id_arg,
         main_camera_jpeg_quality_arg,
+        main_camera_publish_compressed_arg,
+        main_camera_compressed_frame_interval_arg,
         main_camera_exposure_arg,
         main_camera_gain_arg,
         main_camera_disable_auto_exposure_arg,
@@ -265,6 +295,8 @@ def generate_launch_description():
         arm_camera_height_arg,
         arm_camera_fps_arg,
         arm_camera_pixel_format_arg,
+        arm_camera_publish_compressed_arg,
+        arm_camera_compressed_frame_interval_arg,
         # Container with all nodes
         container,
     ])

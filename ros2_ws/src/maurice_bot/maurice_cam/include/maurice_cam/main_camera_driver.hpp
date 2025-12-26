@@ -252,6 +252,11 @@ private:
   std::string frame_id_;
   int jpeg_quality_;
 
+  // Compressed image publishing settings
+  bool publish_compressed_{true};
+  int compressed_frame_interval_{3};  // Publish compressed every N frames
+  int compressed_frame_counter_{0};
+
   // V4L2 control interface
   int camera_fd_{-1};
   

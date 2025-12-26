@@ -18,12 +18,16 @@ ArmCameraDriver::ArmCameraDriver(const rclcpp::NodeOptions & options)
     this->declare_parameter<int>("height", 480);
     this->declare_parameter<double>("fps", 30.0);
     this->declare_parameter<std::string>("pixel_format", "YUYV");
+    this->declare_parameter<bool>("publish_compressed", false);
+    this->declare_parameter<int>("compressed_frame_interval", 5);
 
     // Get parameters
     std::string camera_symlink = this->get_parameter("camera_symlink").as_string();
     width_ = this->get_parameter("width").as_int();
     height_ = this->get_parameter("height").as_int();
     fps_ = static_cast<int>(this->get_parameter("fps").as_double());
+    publish_compressed_ = this->get_parameter("publish_compressed").as_bool();
+    compressed_frame_interval_ = this->get_parameter("compressed_frame_interval").as_int();
 
     // Resolve symlink to device path
     std::string symlink_path = "/dev/v4l/by-id/" + camera_symlink;
@@ -58,11 +62,16 @@ ArmCameraDriver::ArmCameraDriver(const rclcpp::NodeOptions & options)
         .durability_volatile();  // Volatile durability
 
     image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/mars/arm/image_raw", qos);
-    compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/mars/arm/image_raw/compressed", qos);
+    
+    if (publish_compressed_) {
+        compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/mars/arm/image_raw/compressed", qos);
+    }
     
     RCLCPP_DEBUG(this->get_logger(), "Created publishers with sensor data QoS:");
     RCLCPP_DEBUG(this->get_logger(), "  Raw image: /mars/arm/image_raw");
-    RCLCPP_DEBUG(this->get_logger(), "  Compressed image: /mars/arm/image_raw/compressed");
+    if (publish_compressed_) {
+        RCLCPP_DEBUG(this->get_logger(), "  Compressed image: /mars/arm/image_raw/compressed");
+    }
     RCLCPP_DEBUG(this->get_logger(), "  QoS Settings:");
     RCLCPP_DEBUG(this->get_logger(), "    - Reliability: BEST_EFFORT");
     RCLCPP_DEBUG(this->get_logger(), "    - Durability: VOLATILE");
@@ -349,21 +358,29 @@ void ArmCameraDriver::capture_and_publish() {
             img_msg->step = bgr.cols * 3;
             img_msg->data.assign(bgr.data, bgr.data + (bgr.rows * img_msg->step));
 
-            // Create compressed image message as UniquePtr for zero-copy
-            auto compressed_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
-            compressed_msg->header.stamp = stamp;
-            compressed_msg->header.frame_id = "arm_camera";
-            compressed_msg->format = "jpeg";
-
-            std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};
-            if (!cv::imencode(".jpg", bgr, compressed_msg->data, params)) {
-                RCLCPP_ERROR(this->get_logger(), "Failed to compress image to JPEG");
-            }
-
             // Publish with std::move() for zero-copy intra-process communication
             // Inter-process subscribers (via DDS) still receive serialized copies automatically
             image_pub_->publish(std::move(img_msg));
-            compressed_pub_->publish(std::move(compressed_msg));
+
+            // Conditionally create and publish compressed image at specified interval
+            if (publish_compressed_) {
+                compressed_frame_counter_++;
+                if (compressed_frame_counter_ >= compressed_frame_interval_) {
+                    compressed_frame_counter_ = 0;
+                    
+                    auto compressed_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+                    compressed_msg->header.stamp = stamp;
+                    compressed_msg->header.frame_id = "arm_camera";
+                    compressed_msg->format = "jpeg";
+
+                    std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};
+                    if (!cv::imencode(".jpg", bgr, compressed_msg->data, params)) {
+                        RCLCPP_ERROR(this->get_logger(), "Failed to compress image to JPEG");
+                    } else {
+                        compressed_pub_->publish(std::move(compressed_msg));
+                    }
+                }
+            }
 
             // Debug level for successful operations
             RCLCPP_DEBUG(this->get_logger(), "Successfully processed frame %d, buffer idx %u", frame_count, buf.index);

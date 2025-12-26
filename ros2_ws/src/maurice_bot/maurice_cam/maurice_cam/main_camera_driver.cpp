@@ -16,6 +16,8 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   this->declare_parameter<double>("fps", 30.0);
   this->declare_parameter<std::string>("frame_id", "camera_optical_frame");
   this->declare_parameter<int>("jpeg_quality", 80);
+  this->declare_parameter<bool>("publish_compressed", true);
+  this->declare_parameter<int>("compressed_frame_interval", 3);
   this->declare_parameter<int>("exposure", -1);  // -1 means use current value
   this->declare_parameter<int>("gain", -1);      // -1 means use current value
   this->declare_parameter<bool>("disable_auto_exposure", false);
@@ -34,6 +36,8 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   fps_ = this->get_parameter("fps").as_double();
   frame_id_ = this->get_parameter("frame_id").as_string();
   jpeg_quality_ = this->get_parameter("jpeg_quality").as_int();
+  publish_compressed_ = this->get_parameter("publish_compressed").as_bool();
+  compressed_frame_interval_ = this->get_parameter("compressed_frame_interval").as_int();
   
   // Get V4L2 control parameters
   exposure_setting_ = this->get_parameter("exposure").as_int();
@@ -87,10 +91,12 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
     rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
   );
 
-  compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
-    "/mars/main_camera/image/compressed",
-    rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
-  );
+  if (publish_compressed_) {
+    compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
+      "/mars/main_camera/image/compressed",
+      rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
+    );
+  }
 
   stereo_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
     "/mars/main_camera/stereo",
@@ -99,7 +105,9 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
 
   RCLCPP_INFO(this->get_logger(), "Publishers created:");
   RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image (left camera, rotated)");
-  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image/compressed (left camera, rotated)");
+  if (publish_compressed_) {
+    RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image/compressed (left camera, rotated)");
+  }
   RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/stereo (full stereo, rotated)");
 
   // Initialize TurboJPEG encoder
@@ -455,29 +463,33 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
   left_view.copyTo(left_out);
   
   // -------------------------
-  // (A4) Left compressed: Create UniquePtr for zero-copy intra-process transfer
-  // -------------------------
-  auto left_compressed_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
-  left_compressed_msg->header.stamp = current_time;
-  left_compressed_msg->header.frame_id = frame_id_;
-  left_compressed_msg->format = "jpeg";
-  
-  // Encode from the left buffer using TurboJPEG for faster compression
-  try {
-    jpeg_encoder_->encodeBGR(left_out, jpeg_quality_, left_compressed_msg->data);
-  } catch (const std::exception& e) {
-    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                         "JPEG turbo encode failed: %s", e.what());
-    return;  // Skip publishing this frame
-  }
-  
-  // -------------------------
   // Publish with std::move() for zero-copy intra-process communication
   // Inter-process subscribers (via DDS) still receive serialized copies automatically
   // -------------------------
   stereo_pub_->publish(std::move(stereo_msg));
   image_pub_->publish(std::move(left_msg));
-  compressed_pub_->publish(std::move(left_compressed_msg));
+  
+  // Conditionally create and publish compressed image at specified interval
+  if (publish_compressed_) {
+    compressed_frame_counter_++;
+    if (compressed_frame_counter_ >= compressed_frame_interval_) {
+      compressed_frame_counter_ = 0;
+      
+      auto left_compressed_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+      left_compressed_msg->header.stamp = current_time;
+      left_compressed_msg->header.frame_id = frame_id_;
+      left_compressed_msg->format = "jpeg";
+      
+      // Encode from the left buffer using TurboJPEG for faster compression
+      try {
+        jpeg_encoder_->encodeBGR(left_out, jpeg_quality_, left_compressed_msg->data);
+        compressed_pub_->publish(std::move(left_compressed_msg));
+      } catch (const std::exception& e) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                             "JPEG turbo encode failed: %s", e.what());
+      }
+    }
+  }
 }
 
 void MainCameraDriver::applyAutoExposure(const cv::Mat& frame)

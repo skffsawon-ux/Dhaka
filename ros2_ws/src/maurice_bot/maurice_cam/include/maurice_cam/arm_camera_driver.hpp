@@ -70,6 +70,11 @@ private:
   int height_;
   int fps_;
 
+  // Compressed image publishing settings
+  bool publish_compressed_{false};
+  int compressed_frame_interval_{5};  // Publish compressed every N frames
+  int compressed_frame_counter_{0};
+
   // V4L2 buffers
   struct Buffer {
     void* start;
