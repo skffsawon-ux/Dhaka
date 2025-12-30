@@ -56,14 +56,38 @@ def generate_launch_description():
     
     main_camera_width_arg = DeclareLaunchArgument(
         'main_camera_width',
-        default_value='1280',
-        description='Main camera capture width'
+        default_value='2560',
+        description='Main camera capture width (full FOV)'
     )
     
     main_camera_height_arg = DeclareLaunchArgument(
         'main_camera_height',
+        default_value='720',
+        description='Main camera capture height (full FOV)'
+    )
+    
+    main_camera_publish_left_width_arg = DeclareLaunchArgument(
+        'main_camera_publish_left_width',
+        default_value='640',
+        description='Main camera publish left image width'
+    )
+    
+    main_camera_publish_left_height_arg = DeclareLaunchArgument(
+        'main_camera_publish_left_height',
         default_value='480',
-        description='Main camera capture height'
+        description='Main camera publish left image height'
+    )
+    
+    main_camera_publish_stereo_width_arg = DeclareLaunchArgument(
+        'main_camera_publish_stereo_width',
+        default_value='1280',
+        description='Main camera publish stereo image width'
+    )
+    
+    main_camera_publish_stereo_height_arg = DeclareLaunchArgument(
+        'main_camera_publish_stereo_height',
+        default_value='480',
+        description='Main camera publish stereo image height'
     )
     
     main_camera_fps_arg = DeclareLaunchArgument(
@@ -157,11 +181,6 @@ def generate_launch_description():
         description='Data directory containing calibration config'
     )
     
-    depth_stereo_topic_arg = DeclareLaunchArgument(
-        'depth_stereo_topic',
-        default_value='/mars/main_camera/stereo',
-        description='Input stereo image topic'
-    )
     
     depth_output_topic_arg = DeclareLaunchArgument(
         'depth_output_topic',
@@ -197,6 +216,12 @@ def generate_launch_description():
         'depth_stereo_height',
         default_value='480',
         description='Expected stereo image height'
+    )
+    
+    depth_stereo_topic_arg = DeclareLaunchArgument(
+        'depth_stereo_topic',
+        default_value='/mars/main_camera/stereo',
+        description='Input stereo image topic for depth estimation'
     )
 
     # Arm camera parameters
@@ -255,6 +280,10 @@ def generate_launch_description():
             'camera_symlink': LaunchConfiguration('main_camera_symlink'),
             'width': LaunchConfiguration('main_camera_width'),
             'height': LaunchConfiguration('main_camera_height'),
+            'publish_left_width': LaunchConfiguration('main_camera_publish_left_width'),
+            'publish_left_height': LaunchConfiguration('main_camera_publish_left_height'),
+            'publish_stereo_width': LaunchConfiguration('main_camera_publish_stereo_width'),
+            'publish_stereo_height': LaunchConfiguration('main_camera_publish_stereo_height'),
             'fps': LaunchConfiguration('main_camera_fps'),
             'frame_id': LaunchConfiguration('main_camera_frame_id'),
             'jpeg_quality': LaunchConfiguration('main_camera_jpeg_quality'),
@@ -352,6 +381,10 @@ def generate_launch_description():
         main_camera_symlink_arg,
         main_camera_width_arg,
         main_camera_height_arg,
+        main_camera_publish_left_width_arg,
+        main_camera_publish_left_height_arg,
+        main_camera_publish_stereo_width_arg,
+        main_camera_publish_stereo_height_arg,
         main_camera_fps_arg,
         main_camera_frame_id_arg,
         main_camera_jpeg_quality_arg,

@@ -27,7 +27,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("frame_id", "camera_optical_frame");
   this->declare_parameter<int>("max_disparity", 64);
   this->declare_parameter<bool>("publish_disparity", false);
-  this->declare_parameter<int>("stereo_width", 1280);
+  this->declare_parameter<int>("stereo_width", 1280);  // Process at 1280x480 (640x480 per camera)
   this->declare_parameter<int>("stereo_height", 480);
   this->declare_parameter<int>("process_every_n_frames", 1);  // 1 = process every frame
   this->declare_parameter<bool>("publish_pointcloud", true);

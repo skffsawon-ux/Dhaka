@@ -18,14 +18,38 @@ def generate_launch_description():
     
     width_arg = DeclareLaunchArgument(
         'width',
-        default_value='1280',
-        description='Camera capture width'
+        default_value='2560',
+        description='Camera capture width (full FOV)'
     )
     
     height_arg = DeclareLaunchArgument(
         'height',
+        default_value='720',
+        description='Camera capture height (full FOV)'
+    )
+    
+    publish_left_width_arg = DeclareLaunchArgument(
+        'publish_left_width',
+        default_value='640',
+        description='Publish left image width'
+    )
+    
+    publish_left_height_arg = DeclareLaunchArgument(
+        'publish_left_height',
         default_value='480',
-        description='Camera capture height'
+        description='Publish left image height'
+    )
+    
+    publish_stereo_width_arg = DeclareLaunchArgument(
+        'publish_stereo_width',
+        default_value='1280',
+        description='Publish stereo image width'
+    )
+    
+    publish_stereo_height_arg = DeclareLaunchArgument(
+        'publish_stereo_height',
+        default_value='480',
+        description='Publish stereo image height'
     )
     
     fps_arg = DeclareLaunchArgument(
@@ -125,6 +149,10 @@ def generate_launch_description():
                 'camera_symlink': LaunchConfiguration('camera_symlink'),
                 'width': LaunchConfiguration('width'),
                 'height': LaunchConfiguration('height'),
+                'publish_left_width': LaunchConfiguration('publish_left_width'),
+                'publish_left_height': LaunchConfiguration('publish_left_height'),
+                'publish_stereo_width': LaunchConfiguration('publish_stereo_width'),
+                'publish_stereo_height': LaunchConfiguration('publish_stereo_height'),
                 'fps': LaunchConfiguration('fps'),
                 'frame_id': LaunchConfiguration('frame_id'),
                 'jpeg_quality': LaunchConfiguration('jpeg_quality'),
@@ -150,6 +178,10 @@ def generate_launch_description():
         camera_symlink_arg,
         width_arg,
         height_arg,
+        publish_left_width_arg,
+        publish_left_height_arg,
+        publish_stereo_width_arg,
+        publish_stereo_height_arg,
         fps_arg,
         frame_id_arg,
         jpeg_quality_arg,

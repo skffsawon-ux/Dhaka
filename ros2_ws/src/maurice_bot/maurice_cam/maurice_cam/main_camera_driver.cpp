@@ -11,8 +11,12 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
 {
   // Declare parameters with defaults
   this->declare_parameter<std::string>("camera_symlink", "usb-3D_USB_Camera_3D_USB_Camera_01.00.00-video-index0");
-  this->declare_parameter<int>("width", 1280);
-  this->declare_parameter<int>("height", 480);
+  this->declare_parameter<int>("width", 2560);  // Capture at full FOV (2560x720)
+  this->declare_parameter<int>("height", 720);
+  this->declare_parameter<int>("publish_left_width", 640);   // Publish left at 640x480
+  this->declare_parameter<int>("publish_left_height", 480);
+  this->declare_parameter<int>("publish_stereo_width", 1280); // Publish stereo at 1280x480
+  this->declare_parameter<int>("publish_stereo_height", 480);
   this->declare_parameter<double>("fps", 30.0);
   this->declare_parameter<std::string>("frame_id", "camera_optical_frame");
   this->declare_parameter<int>("jpeg_quality", 80);
@@ -33,6 +37,10 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   std::string camera_symlink = this->get_parameter("camera_symlink").as_string();
   capture_width_ = this->get_parameter("width").as_int();
   capture_height_ = this->get_parameter("height").as_int();
+  publish_left_width_ = this->get_parameter("publish_left_width").as_int();
+  publish_left_height_ = this->get_parameter("publish_left_height").as_int();
+  publish_stereo_width_ = this->get_parameter("publish_stereo_width").as_int();
+  publish_stereo_height_ = this->get_parameter("publish_stereo_height").as_int();
   fps_ = this->get_parameter("fps").as_double();
   frame_id_ = this->get_parameter("frame_id").as_string();
   jpeg_quality_ = this->get_parameter("jpeg_quality").as_int();
@@ -72,15 +80,17 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
     camera_device_ = full_path.string();
   }
 
-  // Calculate left image dimensions (half width for stereo camera)
-  left_width_ = capture_width_ / 2;
-  left_height_ = capture_height_;
+  // Calculate left image dimensions (half width for stereo camera at publish resolution)
+  // Note: Frame is downscaled in GStreamer pipeline, so left is half of publish_stereo_width
+  left_width_ = publish_stereo_width_ / 2;
+  left_height_ = publish_stereo_height_;
 
   RCLCPP_INFO(this->get_logger(), "=== Maurice Main Camera Driver ===");
   RCLCPP_INFO(this->get_logger(), "Camera symlink: %s", camera_symlink.c_str());
   RCLCPP_INFO(this->get_logger(), "Resolved device: %s", camera_device_.c_str());
-  RCLCPP_INFO(this->get_logger(), "Stereo resolution: %dx%d", capture_width_, capture_height_);
-  RCLCPP_INFO(this->get_logger(), "Left camera resolution: %dx%d", left_width_, left_height_);
+  RCLCPP_INFO(this->get_logger(), "Capture resolution: %dx%d (full FOV)", capture_width_, capture_height_);
+  RCLCPP_INFO(this->get_logger(), "Publish stereo: %dx%d (downscaled in GStreamer)", publish_stereo_width_, publish_stereo_height_);
+  RCLCPP_INFO(this->get_logger(), "Publish left: %dx%d", publish_left_width_, publish_left_height_);
   RCLCPP_INFO(this->get_logger(), "FPS: %.1f", fps_);
   RCLCPP_INFO(this->get_logger(), "Frame ID: %s", frame_id_.c_str());
   RCLCPP_INFO(this->get_logger(), "JPEG Quality: %d", jpeg_quality_);
@@ -104,11 +114,11 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   );
 
   RCLCPP_INFO(this->get_logger(), "Publishers created:");
-  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image (left camera, rotated)");
+  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image (left camera, %dx%d)", publish_left_width_, publish_left_height_);
   if (publish_compressed_) {
-    RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image/compressed (left camera, rotated)");
+    RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image/compressed (left camera, %dx%d)", publish_left_width_, publish_left_height_);
   }
-  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/stereo (full stereo, rotated)");
+  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/stereo (stereo, %dx%d)", publish_stereo_width_, publish_stereo_height_);
 
   // Initialize TurboJPEG encoder
   jpeg_encoder_ = std::make_unique<JpegTurboEncoder>();
@@ -253,16 +263,39 @@ bool MainCameraDriver::initializeCamera()
 std::string MainCameraDriver::createGStreamerPipeline()
 {
   // Use MJPG format for better performance with this camera
+  // Pipeline: capture at full resolution, then downscale in GStreamer (hardware accelerated)
   // appsink properties:
   //   max-buffers=1  - Only keep 1 frame in queue (always get newest)
   //   drop=true      - Drop old frames if queue is full (prevents memory buildup)
   //   sync=false     - Don't sync to clock (process as fast as possible)
+  
+  // For Jetson, use nvvidconv for hardware-accelerated scaling and rotation
+  // This is much faster than CPU-based OpenCV operations
+  // flip-method=2 rotates 180 degrees, interpolation-method=4 uses Smart interpolation
+  // nvvidconv outputs YUV/BGRx format, videoconvert converts to BGR for OpenCV
   std::string pipeline = 
     "v4l2src device=" + camera_device_ + " ! "
     "image/jpeg,width=" + std::to_string(capture_width_) + 
     ",height=" + std::to_string(capture_height_) + 
     ",framerate=" + std::to_string(static_cast<int>(fps_)) + "/1 ! "
-    "jpegdec ! videoconvert ! appsink max-buffers=1 drop=true sync=false";
+    "jpegdec ! "
+    "nvvidconv flip-method=2 interpolation-method=4 ! "  // Hardware rotation (180°) and scaling (Smart interpolation)
+    "video/x-raw,width=" + std::to_string(publish_stereo_width_) + 
+    ",height=" + std::to_string(publish_stereo_height_) + " ! "  // nvvidconv outputs its native format
+    "videoconvert ! video/x-raw,format=BGR ! "  // videoconvert handles format conversion to BGR
+    "appsink max-buffers=1 drop=true sync=false";
+  
+  // Alternative pipeline using videoscale (fallback if nvvidconv fails):
+  // "v4l2src device=" + camera_device_ + " ! "
+  // "image/jpeg,width=" + std::to_string(capture_width_) + 
+  // ",height=" + std::to_string(capture_height_) + 
+  // ",framerate=" + std::to_string(static_cast<int>(fps_)) + "/1 ! "
+  // "jpegdec ! "
+  // "videoscale ! "
+  // "video/x-raw,width=" + std::to_string(publish_stereo_width_) + 
+  // ",height=" + std::to_string(publish_stereo_height_) + " ! "
+  // "videoconvert ! appsink max-buffers=1 drop=true sync=false";
+  // Note: Rotation would need to be done in OpenCV with this fallback
   
   return pipeline;
 }
@@ -398,69 +431,88 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
 {
   auto current_time = this->now();
   
-  // Apply auto exposure control BEFORE rotation (using ROI view, no clone)
+  // Frame is already rotated and downscaled to publish_stereo_width x publish_stereo_height by GStreamer
+  // Verify dimensions match expected publish resolution
+  if (static_cast<int>(frame.cols) != publish_stereo_width_ || 
+      static_cast<int>(frame.rows) != publish_stereo_height_) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                         "Frame size mismatch: got %dx%d, expected %dx%d",
+                         frame.cols, frame.rows, publish_stereo_width_, publish_stereo_height_);
+    return;
+  }
+  
+  // Apply auto exposure control (frame is already rotated and downscaled)
   if (enable_auto_exposure_ && !disable_auto_exposure_ && v4l2_controls_initialized_) {
     frame_counter_++;
     if (frame_counter_ >= auto_exposure_update_interval_) {
-      // Use a view into the original frame's left half (no copy)
-      cv::Mat left_roi_for_ae = frame(cv::Rect(0, 0, left_width_, left_height_));
+      // Use left half of the already-downscaled frame
+      cv::Mat left_roi_for_ae = frame(cv::Rect(0, 0, publish_stereo_width_ / 2, publish_stereo_height_));
       applyAutoExposure(left_roi_for_ae);
       frame_counter_ = 0;
     }
   }
   
   // -------------------------
-  // (A1) Stereo msg: Create UniquePtr for zero-copy intra-process transfer
+  // (A1) Stereo msg: Frame is already at publish_stereo_width x publish_stereo_height
   // -------------------------
   auto stereo_msg = std::make_unique<sensor_msgs::msg::Image>();
   stereo_msg->header.stamp = current_time;
   stereo_msg->header.frame_id = frame_id_;
-  stereo_msg->height = capture_height_;
-  stereo_msg->width = capture_width_;
+  stereo_msg->height = publish_stereo_height_;
+  stereo_msg->width = publish_stereo_width_;
   stereo_msg->encoding = "bgr8";
   stereo_msg->is_bigendian = false;
-  stereo_msg->step = capture_width_ * 3;
+  stereo_msg->step = publish_stereo_width_ * 3;
   stereo_msg->data.resize(stereo_msg->height * stereo_msg->step);
   
   // Wrap the ROS message data buffer as a cv::Mat view
   cv::Mat stereo_out(
-    capture_height_, capture_width_, CV_8UC3,
+    publish_stereo_height_, publish_stereo_width_, CV_8UC3,
     stereo_msg->data.data(),
     stereo_msg->step
   );
   
-  // Rotate directly INTO the stereo ROS buffer
-  cv::rotate(frame, stereo_out, cv::ROTATE_180);
+  // Copy frame directly (already rotated and downscaled by GStreamer)
+  // Ensure frame is BGR format (GStreamer might output RGB)
+  if (frame.type() == CV_8UC3) {
+    // Check if we need to convert RGB to BGR
+    // GStreamer videoconvert typically outputs BGR, but verify
+    frame.copyTo(stereo_out);
+  } else {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                         "Unexpected frame type: %d, expected CV_8UC3", frame.type());
+    return;
+  }
   
   // -------------------------
-  // (A2) Left ROI view into rotated stereo (no clone)
-  // After 180° rotation, original right half appears on the left half.
+  // (A2) Left ROI view from frame (already at publish resolution)
+  // After 180° rotation in GStreamer, original right half appears on the left half.
   // -------------------------
-  cv::Rect left_roi(0, 0, left_width_, left_height_);
-  cv::Mat left_view = stereo_out(left_roi);  // View only, no copy
+  cv::Rect left_roi(0, 0, publish_stereo_width_ / 2, publish_stereo_height_);
+  cv::Mat left_view = stereo_out(left_roi);  // Use stereo_out which is guaranteed BGR
   
   // -------------------------
-  // (A3) Left raw msg: Create UniquePtr for zero-copy intra-process transfer
+  // (A3) Left raw msg: Downscale to publish_left_width x publish_left_height
   // -------------------------
   auto left_msg = std::make_unique<sensor_msgs::msg::Image>();
   left_msg->header.stamp = current_time;
   left_msg->header.frame_id = frame_id_;
-  left_msg->height = left_height_;
-  left_msg->width = left_width_;
+  left_msg->height = publish_left_height_;
+  left_msg->width = publish_left_width_;
   left_msg->encoding = "bgr8";
   left_msg->is_bigendian = false;
-  left_msg->step = left_width_ * 3;
+  left_msg->step = publish_left_width_ * 3;
   left_msg->data.resize(left_msg->height * left_msg->step);
   
   // Wrap left ROS message buffer as cv::Mat view
   cv::Mat left_out(
-    left_height_, left_width_, CV_8UC3,
+    publish_left_height_, publish_left_width_, CV_8UC3,
     left_msg->data.data(),
     left_msg->step
   );
   
-  // Copy ROI into left message buffer (one unavoidable copy)
-  left_view.copyTo(left_out);
+  // Downscale left view to publish resolution (only one resize operation now)
+  cv::resize(left_view, left_out, cv::Size(publish_left_width_, publish_left_height_), 0, 0, cv::INTER_LINEAR);
   
   // -------------------------
   // Publish with std::move() for zero-copy intra-process communication
@@ -481,9 +533,16 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
       left_compressed_msg->format = "jpeg";
       
       // Encode from the left buffer using TurboJPEG for faster compression
+      // Ensure left_out is BGR format (CV_8UC3)
       try {
-        jpeg_encoder_->encodeBGR(left_out, jpeg_quality_, left_compressed_msg->data);
-        compressed_pub_->publish(std::move(left_compressed_msg));
+        if (left_out.type() == CV_8UC3 && left_out.channels() == 3) {
+          jpeg_encoder_->encodeBGR(left_out, jpeg_quality_, left_compressed_msg->data);
+          compressed_pub_->publish(std::move(left_compressed_msg));
+        } else {
+          RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                               "Left image format invalid for JPEG encoding: type=%d, channels=%d",
+                               left_out.type(), left_out.channels());
+        }
       } catch (const std::exception& e) {
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                              "JPEG turbo encode failed: %s", e.what());

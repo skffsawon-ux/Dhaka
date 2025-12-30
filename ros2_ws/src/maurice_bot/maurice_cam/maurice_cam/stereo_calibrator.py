@@ -35,7 +35,7 @@ class StereoCalibrator(Node):
 
         # Declare parameters
         self.declare_parameter('stereo_topic', '/mars/main_camera/stereo')
-        self.declare_parameter('stereo_width', 1280)
+        self.declare_parameter('stereo_width', 1280)  # Calibrate at 1280x480 (640x480 per camera)
         self.declare_parameter('stereo_height', 480)
         self.declare_parameter('data_directory', '/home/jetson1/innate-os/data')
         

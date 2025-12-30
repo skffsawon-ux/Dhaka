@@ -244,10 +244,14 @@ private:
 
   // Camera parameters
   std::string camera_device_;
-  int capture_width_;
+  int capture_width_;      // Capture resolution (full FOV)
   int capture_height_;
-  int left_width_;
+  int left_width_;         // Left camera at capture resolution
   int left_height_;
+  int publish_left_width_;   // Publish left at this resolution
+  int publish_left_height_;
+  int publish_stereo_width_; // Publish stereo at this resolution
+  int publish_stereo_height_;
   double fps_;
   std::string frame_id_;
   int jpeg_quality_;
