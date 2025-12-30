@@ -43,7 +43,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   
   // Quality parameters (to match OpenCV SGBM quality)
   this->declare_parameter<int>("confidence_threshold", 32768);  // 0-65535, reject below this
-  this->declare_parameter<int>("min_disparity_threshold", 32);  // Q10.5: 32 = 1 pixel disparity
+  this->declare_parameter<int>("min_disparity_threshold", 16);  // Q11.4: 16 = 1 pixel disparity
   this->declare_parameter<int>("window_size", 5);               // SGM window size (3-11, odd)
 
   // Get parameter values
@@ -251,58 +251,13 @@ bool StereoDepthEstimator::loadCalibration(const std::filesystem::path& calib_pa
     return false;
   }
 
-  // Check if we need to scale (input differs from calibration size)
-  bool needs_scaling = (calib_width != image_width_ || calib_height != image_height_);
-  double scale_x = static_cast<double>(image_width_) / calib_width;
-  double scale_y = static_cast<double>(image_height_) / calib_height;
-
-  // Try to load pre-computed rectification maps from NPZ file
-  std::filesystem::path npz_path = calib_path.parent_path() / "stereo_rectify.npz";
-  bool maps_loaded = false;
-  
-  if (!needs_scaling && std::filesystem::exists(npz_path)) {
-    // Load pre-computed maps from NPZ (faster than computing at runtime)
-    try {
-      // Use cnpy or manual NPZ parsing - for now we'll compute maps
-      // NPZ loading would require additional library, so we compute instead
-      RCLCPP_INFO(this->get_logger(), "NPZ file found but loading not implemented, computing maps...");
-    } catch (...) {
-      RCLCPP_WARN(this->get_logger(), "Failed to load NPZ, will compute rectification maps");
-    }
-  }
-
-  // Scale calibration matrices if image dimensions differ
-  if (needs_scaling) {
-    RCLCPP_INFO(this->get_logger(), "Scaling calibration from %dx%d to %dx%d (scale: %.2fx%.2f)",
-                calib_width, calib_height, image_width_, image_height_, scale_x, scale_y);
-
-    // Scale intrinsic matrices
-    K1_.at<double>(0, 0) *= scale_x;  // fx
-    K1_.at<double>(1, 1) *= scale_y;  // fy
-    K1_.at<double>(0, 2) *= scale_x;  // cx
-    K1_.at<double>(1, 2) *= scale_y;  // cy
-
-    K2_.at<double>(0, 0) *= scale_x;
-    K2_.at<double>(1, 1) *= scale_y;
-    K2_.at<double>(0, 2) *= scale_x;
-    K2_.at<double>(1, 2) *= scale_y;
-
-    // Scale projection matrices
-    P1_.at<double>(0, 0) *= scale_x;
-    P1_.at<double>(1, 1) *= scale_y;
-    P1_.at<double>(0, 2) *= scale_x;
-    P1_.at<double>(1, 2) *= scale_y;
-
-    P2_.at<double>(0, 0) *= scale_x;
-    P2_.at<double>(1, 1) *= scale_y;
-    P2_.at<double>(0, 2) *= scale_x;
-    P2_.at<double>(1, 2) *= scale_y;
-    P2_.at<double>(0, 3) *= scale_x;  // Tx * fx
-
-    // Scale Q matrix
-    Q_.at<double>(0, 3) *= scale_x;  // -cx
-    Q_.at<double>(1, 3) *= scale_y;  // -cy
-    Q_.at<double>(2, 3) *= scale_x;  // f (approximately)
+  // Verify calibration dimensions match runtime dimensions
+  if (calib_width != image_width_ || calib_height != image_height_) {
+    RCLCPP_ERROR(this->get_logger(), 
+                 "Calibration dimensions (%dx%d) do not match runtime dimensions (%dx%d). "
+                 "Please recalibrate at the correct resolution.",
+                 calib_width, calib_height, image_width_, image_height_);
+    return false;
   }
 
   // Extract baseline and focal length from Q matrix
@@ -327,16 +282,14 @@ bool StereoDepthEstimator::loadCalibration(const std::filesystem::path& calib_pa
   RCLCPP_INFO(this->get_logger(), "Stereo parameters: focal=%.2f px, baseline=%.4f m (%.1f mm)",
               focal_length_, baseline_, baseline_ * 1000.0);
 
-  // Compute OpenCV rectification maps if not loaded from NPZ
-  if (!maps_loaded) {
-    cv::initUndistortRectifyMap(K1_, D1_, R1_, P1_, 
-                                 cv::Size(image_width_, image_height_),
-                                 CV_32FC1, map1_left_, map2_left_);
-    cv::initUndistortRectifyMap(K2_, D2_, R2_, P2_,
-                                 cv::Size(image_width_, image_height_),
-                                 CV_32FC1, map1_right_, map2_right_);
-    RCLCPP_INFO(this->get_logger(), "Rectification maps computed (%dx%d)", image_width_, image_height_);
-  }
+  // Compute OpenCV rectification maps
+  cv::initUndistortRectifyMap(K1_, D1_, R1_, P1_, 
+                               cv::Size(image_width_, image_height_),
+                               CV_32FC1, map1_left_, map2_left_);
+  cv::initUndistortRectifyMap(K2_, D2_, R2_, P2_,
+                               cv::Size(image_width_, image_height_),
+                               CV_32FC1, map1_right_, map2_right_);
+  RCLCPP_INFO(this->get_logger(), "Rectification maps computed (%dx%d)", image_width_, image_height_);
 
   return true;
 }
@@ -381,7 +334,7 @@ bool StereoDepthEstimator::initializeVPI()
                           VPI_BACKEND_CUDA, &vpi_right_rectified_);
   CHECK_VPI_STATUS(status, "Failed to create right rectified image");
 
-  // Disparity output (S16 format, Q10.5 fixed point)
+  // Disparity output (S16 format, Q11.4 fixed point - scaled by 16)
   // Include VPI_BACKEND_CPU to allow locking for CPU access after GPU processing
   status = vpiImageCreate(image_width_, image_height_, VPI_IMAGE_FORMAT_S16,
                           VPI_BACKEND_CUDA | VPI_BACKEND_CPU, &vpi_disparity_);
@@ -586,10 +539,15 @@ void StereoDepthEstimator::stereoImageCallback(sensor_msgs::msg::Image::UniquePt
 void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcpp::Time& timestamp)
 {
   // Split stereo frame into left and right images (zero-copy ROI views)
-  // NOTE: After 180° rotation in main_camera_driver, the original right camera 
-  // is now on the left side of the frame
-  cv::Mat left_img = stereo_frame(cv::Rect(0, 0, image_width_, image_height_));
-  cv::Mat right_img = stereo_frame(cv::Rect(image_width_, 0, image_width_, image_height_));
+  // NOTE: After 180° rotation in main_camera_driver:
+  //   - First half (x=0 to width) = original RIGHT camera
+  //   - Second half (x=width to 2*width) = original LEFT camera
+  // The calibrator swaps these when calibrating, so:
+  //   - K1/D1/R1/P1 are calibrated for original LEFT (second half)
+  //   - K2/D2/R2/P2 are calibrated for original RIGHT (first half)
+  // Therefore, we must swap the rectification maps when applying them.
+  cv::Mat left_img = stereo_frame(cv::Rect(0, 0, image_width_, image_height_));  // First half = original RIGHT
+  cv::Mat right_img = stereo_frame(cv::Rect(image_width_, 0, image_width_, image_height_));  // Second half = original LEFT
 
   VPIStatus status;
 
@@ -605,10 +563,11 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
     right_gray = right_img;
   }
 
-  // Rectify using OpenCV (this works correctly with scaled calibration)
+  // Rectify using OpenCV
+  // Swap maps: left_img (original RIGHT) needs map1_right_, right_img (original LEFT) needs map1_left_
   cv::Mat left_rect, right_rect;
-  cv::remap(left_gray, left_rect, map1_left_, map2_left_, cv::INTER_LINEAR);
-  cv::remap(right_gray, right_rect, map1_right_, map2_right_, cv::INTER_LINEAR);
+  cv::remap(left_gray, left_rect, map1_right_, map2_right_, cv::INTER_LINEAR);  // Original RIGHT uses K2/D2/R2/P2
+  cv::remap(right_gray, right_rect, map1_left_, map2_left_, cv::INTER_LINEAR);   // Original LEFT uses K1/D1/R1/P1
 
   // Wrap rectified images for VPI (they're already grayscale U8)
   VPIImage vpi_left_wrap = nullptr;
@@ -719,6 +678,11 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
   depth_msg->step = image_width_ * sizeof(uint16_t);
   depth_msg->data.resize(depth_msg->height * depth_msg->step);
 
+  // VPI disparity scaling factor - confirmed from VPI documentation
+  // VPI outputs disparity in Q10.5 format (scaled by 32), not Q11.4 (scaled by 16)
+  // Reference: VPI example code shows "Disparities are in Q10.5 format, so to map it to float, it gets divided by 32"
+  const float DISPARITY_SCALE = 32.0f;  // Convert VPI disparity to pixels (Q10.5 format)
+
   // Prepare disparity visualization message if needed (do both in single pass)
   std::unique_ptr<sensor_msgs::msg::Image> disp_msg;
   uint8_t* vis_ptr = nullptr;
@@ -735,20 +699,28 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
     disp_msg->step = image_width_;
     disp_msg->data.resize(disp_msg->height * disp_msg->step);
     vis_ptr = disp_msg->data.data();
-    disp_vis_scale = 255.0f / static_cast<float>(max_disparity_ * 32);  // Q10.5 scale included
+    disp_vis_scale = 255.0f / static_cast<float>(max_disparity_ * DISPARITY_SCALE);  // Scale to pixels
   }
 
-  // Convert disparity to depth (optimized single-pass loop)
-  // Disparity is in Q10.5 format: actual_disparity = raw_value / 32
-  // depth_mm = baseline_mm * focal_length / actual_disparity
-  //          = baseline_mm * focal_length * 32 / raw_value
-  //          = bf_scaled_mm / raw_value
+  // Convert disparity to depth using Q matrix (like OpenCV reprojectImageTo3D)
+  // VPI outputs disparity in S16 format - need to determine scaling factor
+  // The Q matrix expects disparity in pixels (not scaled)
+  // Formula: depth = Q[2,3] / (Q[3,2] * disparity + Q[3,3])
+  // But we need to convert VPI disparity to pixels first
   uint16_t* depth_ptr = reinterpret_cast<uint16_t*>(depth_msg->data.data());
   const int16_t* disp_ptr = reinterpret_cast<const int16_t*>(disparity_data.buffer.pitch.planes[0].data);
   const int disp_pitch = disparity_data.buffer.pitch.planes[0].pitchBytes / sizeof(int16_t);
 
-  // Precompute: bf * 32 * 1000 (convert meters to millimeters)
-  const float bf_scaled_mm = static_cast<float>(baseline_ * focal_length_ * 32.0 * 1000.0);
+  // Extract Q matrix values for depth calculation
+  // Q[2,3] = focal length, Q[3,2] = -1/Tx (negative), Q[3,3] = (cx-cx')/Tx
+  // Use simpler formula: depth = baseline * focal_length / disparity
+  // baseline = |1/Q[3,2]| = |Tx|, focal = Q[2,3]
+  const double Q_focal = Q_.at<double>(2, 3);      // Q[2,3] = focal length
+  const double Q_baseline_inv = Q_.at<double>(3, 2); // Q[3,2] = -1/Tx (negative)
+  const double baseline_m = std::abs(1.0 / Q_baseline_inv); // baseline = |Tx|
+  
+  // Precompute: baseline * focal_length * scale * 1000 (convert meters to millimeters)
+  const float bf_scaled_mm = static_cast<float>(baseline_m * Q_focal * DISPARITY_SCALE * 1000.0);
 
   // Process row by row for better cache locality
   for (int y = 0; y < image_height_; y++) {
@@ -757,11 +729,12 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
     uint8_t* vis_row = vis_ptr ? (vis_ptr + y * image_width_) : nullptr;
 
     for (int x = 0; x < image_width_; x++) {
-      const int16_t disp_q10_5 = disp_row[x];
+      const int16_t disp_raw = disp_row[x];
       
-      if (disp_q10_5 > 0) {
-        // depth_mm = bf_mm * 32 / disp_q10_5
-        float depth_mm = bf_scaled_mm / static_cast<float>(disp_q10_5);
+      if (disp_raw > 0) {
+        // Use standard formula: depth_mm = baseline_mm * focal_length * scale / disparity_raw
+        // This is equivalent to: depth = baseline * focal / (disparity_raw / scale)
+        float depth_mm = bf_scaled_mm / static_cast<float>(disp_raw);
         // Clamp to uint16 range (0-65535 mm = 0-65.5m), 0 = invalid
         depth_row[x] = static_cast<uint16_t>(std::clamp(depth_mm, 1.0f, 65535.0f));
       } else {
@@ -771,7 +744,7 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
       // Disparity visualization in same pass (avoids second lock)
       if (vis_row) {
         vis_row[x] = static_cast<uint8_t>(
-          std::clamp(static_cast<float>(disp_q10_5) * disp_vis_scale, 0.0f, 255.0f));
+          std::clamp(static_cast<float>(disp_raw) * disp_vis_scale, 0.0f, 255.0f));
       }
     }
   }

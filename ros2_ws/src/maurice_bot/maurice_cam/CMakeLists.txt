@@ -240,6 +240,13 @@ install(
   PATTERN "*.cpp" EXCLUDE
 )
 
+# Install Python executables
+install(PROGRAMS
+  maurice_cam/stereo_calibrator.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME stereo_calibrator
+)
+
 # Install launch files
 install(DIRECTORY launch/
   DESTINATION share/${PROJECT_NAME}/launch

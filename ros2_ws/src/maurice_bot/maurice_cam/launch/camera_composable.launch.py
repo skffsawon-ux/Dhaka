@@ -147,7 +147,7 @@ def generate_launch_description():
     # Stereo depth estimator parameters
     launch_depth_estimator_arg = DeclareLaunchArgument(
         'launch_depth_estimator',
-        default_value='true',
+        default_value='false',  # Temporarily disabled
         description='Launch the stereo depth estimator'
     )
     
@@ -336,7 +336,7 @@ def generate_launch_description():
             main_camera_node,
             arm_camera_node,
             webrtc_node,
-            depth_estimator_node,
+            # depth_estimator_node,  # Temporarily disabled for calibration
         ],
         output='screen',
         emulate_tty=True,

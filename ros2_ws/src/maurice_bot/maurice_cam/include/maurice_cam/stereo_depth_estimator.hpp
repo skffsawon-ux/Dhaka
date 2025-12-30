@@ -118,7 +118,7 @@ private:
 
   // Quality parameters (to match OpenCV SGBM)
   int confidence_threshold_;        // Reject pixels with confidence below this (0-65535)
-  int min_disparity_threshold_;     // Minimum disparity in Q10.5 (reject noise)
+  int min_disparity_threshold_;     // Minimum disparity in Q11.4 (reject noise, 16 = 1 pixel)
   int window_size_;                 // SGM window size
 
   // Image dimensions
