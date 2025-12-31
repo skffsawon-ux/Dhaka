@@ -767,7 +767,7 @@ private:
             }
 
             response->success = true;
-            response->message = "Robot name changed from '" + old_name + "' to '" + request->robot_name;
+            response->message = "Robot name changed from '" + old_name + "' to '" + request->robot_name + "'";
             
             RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
 
