@@ -222,11 +222,9 @@ bool set_system_hostname(const std::string& sanitized_hostname, std::string& err
     std::string cmd = "sudo hostnamectl hostname --static \"" + sanitized_hostname + "\" 2>&1";
     
     // Execute the command
-    std::string output = exec_command(cmd);
     int exit_code = std::system(cmd.c_str());
-    
     if (WEXITSTATUS(exit_code) != 0) {
-        error_msg = "Failed to set hostname via hostnamectl: " + output;
+        error_msg = "Failed to set hostname via hostnamectl";
         return false;
     }
     
