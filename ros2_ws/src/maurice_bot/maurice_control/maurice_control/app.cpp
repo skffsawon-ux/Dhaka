@@ -768,17 +768,8 @@ private:
                 return;
             }
 
-            // Set system hostname to match robot name
-            std::string hostname_error;
-            if (!set_system_hostname(request->robot_name, hostname_error)) {
-                RCLCPP_WARN(this->get_logger(), "Failed to set system hostname: %s", hostname_error.c_str());
-                response->success = true;  // Still success for robot_info update
-                response->message = "Robot name changed from '" + old_name + "' to '" + request->robot_name + 
-                                   "', but failed to set system hostname: " + hostname_error;
-            } else {
-                response->success = true;
-                response->message = "Robot name and system hostname changed from '" + old_name + "' to '" + request->robot_name + "'";
-            }
+            response->success = true;
+            response->message = "Robot name changed from '" + old_name + "' to '" + request->robot_name;
             
             RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
 
