@@ -30,7 +30,7 @@ services:
     volumes:
       # 1) Mount your local code
       - ./ros2_ws:/root/innate-os/ros2_ws:rw
-      - ./dds:/root/innate-os/dds:rw
+      - ./scripts:/root/innate-os/scripts:rw
       - ./directives:/root/innate-os/directives:rw
       - ./primitives:/root/innate-os/primitives:rw
 
@@ -45,6 +45,7 @@ services:
     # 3) Keep container open for interactive usage
     tty: true
     stdin_open: true
+    shm_size: "2g"
     networks:
       - x11
     extra_hosts:

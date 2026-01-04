@@ -20,9 +20,13 @@ RUN apt-get update && \
 RUN pip install --upgrade \
     websockets \
     pydantic \
-    opencv-python \
+    'numpy<2' \
+    'opencv-python<4.10' \
     h5py \
-    cartesia
+    cartesia \
+    torch \
+    torchvision \
+    einops
 
 # 4. Install oh-my-zsh (for root, since containers typically run as root unless changed)
 #    The official install script tries to prompt, so we run it in a way that doesn't hang.

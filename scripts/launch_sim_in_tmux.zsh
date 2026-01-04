@@ -39,6 +39,11 @@ tmux split-window -t mars:nav-brain -h
 tmux send-keys -t mars:nav-brain.1 "ros2 launch brain_client brain_client.sim.launch.py" C-m
 echo "Started brain client..."
 
+# === Window 4: Behavior Server ===
+tmux new-window -t mars -n behavior
+tmux send-keys -t mars:behavior "ros2 launch manipulation behavior.launch.py" C-m
+echo "Started behavior server..."
+
 # Select the rosbridge-app window
 tmux select-window -t mars:rosbridge-app
 
