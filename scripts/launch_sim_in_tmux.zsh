@@ -21,17 +21,21 @@ tmux send-keys -t mars:rosbridge-app "ros2 launch maurice_sim_bringup sim_rosbri
 echo "Started rosbridge..."
 sleep 2
 # Split and run app
-tmux split-window -t mars:rosbridge-app -v
+tmux split-window -t mars:rosbridge-app -h
 tmux send-keys -t mars:rosbridge-app.1 "ros2 launch maurice_control app.sim.launch.py" C-m
 echo "Started app control..."
+# === Window 2: WebRTC Streamer ===
+tmux new-window -t mars -n webrtc
+tmux send-keys -t mars:webrtc "ros2 launch innate_webrtc_streamer webrtc_streamer.launch.py" C-m
+echo "Started webrtc streamer..."
 
-# === Window 2: Nav + Brain ===
+# === Window 3: Nav + Brain ===
 tmux new-window -t mars -n nav-brain
 tmux send-keys -t mars:nav-brain "ros2 launch maurice_nav navigation_sim.launch.py" C-m
 echo "Started navigation system..."
 sleep 2
 # Split and run brain client
-tmux split-window -t mars:nav-brain -v
+tmux split-window -t mars:nav-brain -h
 tmux send-keys -t mars:nav-brain.1 "ros2 launch brain_client brain_client.sim.launch.py" C-m
 echo "Started brain client..."
 
