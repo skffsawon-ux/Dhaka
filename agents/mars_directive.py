@@ -28,6 +28,10 @@ class MarsAgent(Agent):
             "wave",
         ]
 
+    def get_inputs(self) -> List[str]:
+        """Enable microphone input to hear user"""
+        return ["micro"]
+
     def get_prompt(self) -> str:
         """Return the prompt that defines the robot's personality and behavior"""
         return """you are MARS, an agentic robot made by Innate.
