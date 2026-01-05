@@ -462,10 +462,26 @@ if [ -d "$PRIMITIVES_DIR" ]; then
         mv "$h5_file" "$REPO_DIR/skills/$rel_path"
     done
     
+    # Remove any __pycache__ directories left behind
+    find "$PRIMITIVES_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    
     # Remove primitives directory if no files remain
     if [ -z "$(find "$PRIMITIVES_DIR" -type f)" ]; then
         rm -rf "$PRIMITIVES_DIR"
         log "  Removed empty primitives directory"
+    fi
+fi
+
+# Clean up directives directory if it exists
+DIRECTIVES_DIR="$REPO_DIR/directives"
+if [ -d "$DIRECTIVES_DIR" ]; then
+    # Remove any __pycache__ directories left behind
+    find "$DIRECTIVES_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    
+    # Remove directives directory if no files remain
+    if [ -z "$(find "$DIRECTIVES_DIR" -type f)" ]; then
+        rm -rf "$DIRECTIVES_DIR"
+        log "  Removed empty directives directory"
     fi
 fi
 
