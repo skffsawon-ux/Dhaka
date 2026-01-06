@@ -450,9 +450,9 @@ log "  Sudoers configured for $ACTUAL_USER"
 # -----------------------------------------------------------------------------
 # 10. Move primitives .h5 files to skills directory
 # -----------------------------------------------------------------------------
-log "Migrating primitives .h5 files to skills directory..."
 PRIMITIVES_DIR="$REPO_DIR/primitives"
 if [ -d "$PRIMITIVES_DIR" ]; then
+    log "Migrating primitives .h5 files to skills directory..."
     # Move each .h5 file to corresponding skills/ path (e.g. primitives/x/a.h5 -> skills/x/a.h5)
     find "$PRIMITIVES_DIR" -name "*.h5" -type f | while read -r h5_file; do
         # Remove the primitives directory path to get just the relative path (e.g. /path/primitives/x/a.h5 -> x/a.h5)
