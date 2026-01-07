@@ -37,8 +37,7 @@ if(VPI_INCLUDE_DIR AND VPI_LIBRARY)
   set(VPI_FOUND TRUE)
   message(STATUS "Found VPI: ${VPI_LIBRARY}")
 else()
-  set(VPI_FOUND FALSE)
-  message(WARNING "VPI not found. Stereo depth estimator will not be built.")
+  message(FATAL_ERROR "VPI not found at ${VPI_ROOT}. Please install nvidia-vpi-dev package.")
 endif()
 
 # Set Python version
