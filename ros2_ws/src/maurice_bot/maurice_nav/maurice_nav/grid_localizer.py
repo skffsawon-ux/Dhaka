@@ -194,6 +194,7 @@ class GridLocalizer(Node):
         return super().on_deactivate(state)
 
     def _create_bond(self):
+        return
         """Create bond connection to lifecycle manager."""
         if self.bond_heartbeat_period > 0.0:
             self.get_logger().info(f'Creating bond ({self.get_name()}) to lifecycle manager.')
@@ -210,6 +211,15 @@ class GridLocalizer(Node):
         """Destroy bond connection to lifecycle manager."""
         if self.bond is not None:
             self.get_logger().info(f'Destroying bond ({self.get_name()}) to lifecycle manager.')
+            try:
+                self.bond.shutdown()
+            except rclpy._rclpy_pybind11.InvalidHandle:
+                # Bond already destroyed, this is fine
+                pass
+            except Exception as e:
+                # Log and re-raise any other errors
+                self.get_logger().error(f'Error destroying bond: {e}')
+                raise
             self.bond = None
     def _cleanup_resources(self):
         """Helper method to clean up all node resources."""
