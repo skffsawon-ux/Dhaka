@@ -38,6 +38,8 @@ gir1.2-gst-plugins-base-1.0
 gir1.2-gst-plugins-bad-1.0
 python3-gi
 python3-gst-1.0
+# NVIDIA GStreamer plugins (for nvvidconv hardware acceleration on Jetson)
+nvidia-l4t-gstreamer
 
 # Python system packages
 python3-pygame
