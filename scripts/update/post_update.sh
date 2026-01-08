@@ -454,6 +454,10 @@ $ACTUAL_USER ALL=(ALL) NOPASSWD: /usr/local/bin/restart_robot_networking.sh
 
 # Post-update script (called by innate-update)
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $REPO_DIR/scripts/update/post_update.sh
+
+# NetworkManager CLI (called by BLE provisioner for WiFi configuration)
+$ACTUAL_USER ALL=(ALL) NOPASSWD: /usr/bin/nmcli
+$ACTUAL_USER ALL=(ALL) NOPASSWD: /bin/nmcli
 EOF
 chmod 440 "$SUDOERS_FILE"
 log "  Sudoers configured for $ACTUAL_USER"
