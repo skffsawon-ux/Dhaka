@@ -296,10 +296,36 @@ class GridLocalizer(Node):
         """Handle incoming map updates."""
         # Note: cupy imported at module level
         
-        if self.map_received:
-            return  # Only process the first map for now
+        # Check if this is a map update (second map)
+        is_map_update = self.map_received
         
-        self.get_logger().info(f'Received map: {msg.info.width}x{msg.info.height}, res={msg.info.resolution}')
+        if is_map_update:
+            self.get_logger().info(f'Received map update: {msg.info.width}x{msg.info.height}, res={msg.info.resolution}')
+            
+            # Free old resources before reassigning
+            if self.map_free_gpu is not None:
+                self.get_logger().info('Freeing old GPU map memory')
+                del self.map_free_gpu
+                self.map_free_gpu = None
+            cp.get_default_memory_pool().free_all_blocks()
+            
+            if self.map_free is not None:
+                del self.map_free
+                self.map_free = None
+            
+            if self.free_pixels is not None:
+                del self.free_pixels
+                self.free_pixels = None
+            
+            # Reset auto-localization state for new map
+            self._auto_done = False
+            # Re-enable auto-localize timer (restart the cancelled timer)
+            if self._auto_localize_enabled and self._auto_timer:
+                self._auto_timer.reset()
+                self.get_logger().info('Re-enabled auto-localize timer for new map')
+        else:
+            self.get_logger().info(f'Received map: {msg.info.width}x{msg.info.height}, res={msg.info.resolution}')
+        
         self._publish_status('processing_map')
         
         self.resolution = msg.info.resolution
