@@ -105,7 +105,10 @@ def nmcli_connection_exists(ssid):
     return True, ssid in existing_connections, None
     
 def nmcli_add_or_modify_connection(ssid, password, priority):
-    """Adds a new Wi-Fi connection or modifies an existing one."""
+    """Adds a new Wi-Fi connection or modifies an existing one.
+    
+    Requires elevated privileges (uses sudo).
+    """
     success_check, exists, err_check = nmcli_connection_exists(ssid)
     if not success_check:
         return False, f"Failed to check if connection exists: {err_check}"
@@ -128,27 +131,32 @@ def nmcli_add_or_modify_connection(ssid, password, priority):
     else: # Open network
         cmd.extend(['wifi-sec.key-mgmt', 'none'])
     
-    success, _, stderr = _run_nmcli(cmd)
+    # Use sudo for privileged operations
+    success, _, stderr = _run_nmcli(cmd, use_sudo=True)
     if not success:
          action = "modify" if exists else "add"
          return False, f"Failed to {action} connection '{ssid}': {stderr or 'Unknown error'}"
 
     # Ensure the profile is pinned to the default Wi‑Fi interface
     # Use an explicit modify call, which works reliably for both add and modify paths
-    success_bind, _, stderr_bind = _run_nmcli(['nmcli', 'connection', 'modify', ssid, 'connection.interface-name', DEFAULT_WIFI_INTERFACE])
+    success_bind, _, stderr_bind = _run_nmcli(['nmcli', 'connection', 'modify', ssid, 'connection.interface-name', DEFAULT_WIFI_INTERFACE], use_sudo=True)
     if not success_bind:
         return False, f"Failed to bind '{ssid}' to interface {DEFAULT_WIFI_INTERFACE}: {stderr_bind or 'Unknown error'}"
     return True, None # Success
 
 def nmcli_delete_connection(ssid):
-    """Deletes a Wi-Fi connection profile."""
+    """Deletes a Wi-Fi connection profile.
+    
+    Requires elevated privileges (uses sudo).
+    """
     success_check, exists, err_check = nmcli_connection_exists(ssid)
     if not success_check:
         return False, f"Failed to check if connection exists before deletion: {err_check}"
     if not exists:
          return False, f"Network profile '{ssid}' not found."
     
-    success, _, stderr = _run_nmcli(['nmcli', 'connection', 'delete', ssid])
+    # Use sudo for privileged operations
+    success, _, stderr = _run_nmcli(['nmcli', 'connection', 'delete', ssid], use_sudo=True)
     if not success:
         return False, f"Failed to delete connection '{ssid}': {stderr or 'Unknown error'}"
     return True, None # Success
@@ -175,7 +183,7 @@ def nmcli_connect(ssid, ifname=DEFAULT_WIFI_INTERFACE):
     """Attempts to activate (connect to) a given network profile.
 
     Uses the DEFAULT_WIFI_INTERFACE constant if no interface is specified.
-    Relies on Polkit rules for permissions (no sudo).
+    Requires elevated privileges (uses sudo).
 
     Args:
         ssid (str): The name of the connection profile (SSID).
@@ -187,16 +195,18 @@ def nmcli_connect(ssid, ifname=DEFAULT_WIFI_INTERFACE):
     
     nm_logger.info(f"Attempting to connect to network profile: {ssid}{f' on interface {target_interface}' if target_interface else ''}")
     
-    # Base command - relies on Polkit rule, no sudo needed
+    # Base command - use sudo for privileged operations
     cmd = ['nmcli', 'connection', 'up', ssid] 
     
     # Add ifname if specified (or defaulted)
     if target_interface:
         cmd.extend(['ifname', target_interface])
         
+    # Use sudo for privileged operations
     success, stdout, stderr = _run_nmcli(
         cmd, # Use the constructed command list
-        timeout=30
+        timeout=30,
+        use_sudo=True
     )
     if not success:
          # Provide more context in the error
