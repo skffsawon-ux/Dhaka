@@ -263,7 +263,7 @@ class ModeManager(Node):
                         self.get_logger().warning(f"Saved map '{saved_map}' not found, defaulting to home.yaml")
             
             # Default to home.yaml
-            default_map = "home.yaml"
+            default_map = None
             if default_map in self.available_maps:
                 self.get_logger().info(f"No saved map found, defaulting to {default_map}")
                 return default_map
@@ -273,12 +273,12 @@ class ModeManager(Node):
                 self.get_logger().info(f"Default map '{default_map}' not found, using first available: {first_map}")
                 return first_map
             else:
-                # No maps available, fallback to home.yaml anyway
-                self.get_logger().warning("No maps available, using home.yaml as fallback")
-                return "home.yaml"
+                # No maps available, return None
+                self.get_logger().warning("No maps available")
+                return None
         except Exception as e:
-            self.get_logger().error(f"Error loading last map: {e}, defaulting to home.yaml")
-            return "home.yaml"
+            self.get_logger().error(f"Error loading last map: {e}")
+            return None
 
     def save_last_mode(self, mode):
         """Save the current mode to file for persistence"""
@@ -578,6 +578,10 @@ class ModeManager(Node):
             max_retries: Maximum number of retry attempts
         Returns: True if map loaded successfully, False otherwise
         """
+
+        if node_name is None:
+            return False
+
         map_request = LoadMap.Request()
         map_request.map_url = os.path.join(self.maps_dir, self.current_map)
         
