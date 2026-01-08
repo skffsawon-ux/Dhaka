@@ -222,8 +222,19 @@ if [ -d "$REPO_DIR/udev" ]; then
     log "Udev rules reloaded"
 fi
 
+
+
+# 4. Configure passwordless shutdown for ROS app
+log "Configuring passwordless shutdown..."
+ACTUAL_USER=${SUDO_USER:-$USER}
+SUDOERS_FILE="/etc/sudoers.d/ros-shutdown"
+echo "$ACTUAL_USER ALL=(ALL) NOPASSWD: /sbin/shutdown" > "$SUDOERS_FILE"
+chmod 440 "$SUDOERS_FILE"
+log "Passwordless shutdown configured for user $ACTUAL_USER"
+
+
 # -----------------------------------------------------------------------------
-# 4. Configure Hardware (Bluetooth, Arducam, WiFi power management)
+# 5. Update Bluetooth configurations (optional - only on systems with bluetooth)
 # -----------------------------------------------------------------------------
 log "Configuring hardware..."
 
@@ -246,7 +257,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 5. Install/update dependencies (skip on first install)
+# 6. Install/update dependencies (skip on first install)
 # -----------------------------------------------------------------------------
 if [ "$FIRST_INSTALL" = true ]; then
     log "Skipping dependencies (already installed during first install)"
@@ -324,7 +335,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 6. Rebuild ROS2 workspace if needed
+# 7. Rebuild ROS2 workspace if needed
 # -----------------------------------------------------------------------------
 log "Checking ROS2 workspace..."
 if [ -d "$REPO_DIR/ros2_ws/src" ]; then
@@ -349,7 +360,7 @@ if sudo -u "$ACTUAL_USER" tmux has-session -t ros_nodes 2>/dev/null; then
 fi
 
 # -----------------------------------------------------------------------------
-# 7. Setup Zsh configuration
+# 8. Setup Zsh configuration
 # -----------------------------------------------------------------------------
 log "Setting up Zsh configuration..."
 
@@ -414,7 +425,7 @@ if ! groups "$ACTUAL_USER" | grep -q "\bdialout\b"; then
 fi
 
 # -----------------------------------------------------------------------------
-# 8. Setup DDS configuration
+# 9. Setup DDS configuration
 # -----------------------------------------------------------------------------
 log "Setting up DDS configuration..."
 if [ -d "$REPO_DIR/dds" ]; then
@@ -428,7 +439,7 @@ if [ -d "$REPO_DIR/dds" ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 9. Configure sudoers for passwordless restart script
+# 10. Configure sudoers for passwordless restart script
 # -----------------------------------------------------------------------------
 log "Configuring sudoers..."
 
@@ -448,7 +459,7 @@ chmod 440 "$SUDOERS_FILE"
 log "  Sudoers configured for $ACTUAL_USER"
 
 # -----------------------------------------------------------------------------
-# 10. Move primitives .h5 files to skills directory
+# 11. Move primitives .h5 files to skills directory
 # -----------------------------------------------------------------------------
 PRIMITIVES_DIR="$REPO_DIR/primitives"
 if [ -d "$PRIMITIVES_DIR" ]; then
@@ -486,7 +497,7 @@ if [ -d "$DIRECTIVES_DIR" ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 11. Enable and restart services
+# 12. Enable and restart services
 # -----------------------------------------------------------------------------
 log "Enabling and starting services..."
 
@@ -530,7 +541,7 @@ for service in "${SERVICES[@]}"; do
 done
 
 # -----------------------------------------------------------------------------
-# 12. Launch ROS nodes in Tmux (optional, depends on ros-app.service)
+# 13. Launch ROS nodes in Tmux (optional, depends on ros-app.service)
 # -----------------------------------------------------------------------------
 # Note: If ros-app.service is configured correctly, it will launch the tmux session
 # If not using systemd, you can manually launch:
