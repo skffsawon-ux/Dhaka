@@ -91,7 +91,7 @@ def generate_launch_description():
     planner_node = Node(
         package='nav2_planner',
         executable='planner_server',
-        name='navigation_planner_server',
+        name='planner_server',
         output='screen',
         parameters=[planner_params_file, costmap_params_file]
     )
@@ -100,7 +100,7 @@ def generate_launch_description():
     controller_node = Node(
         package='nav2_controller',
         executable='controller_server',
-        name='navigation_controller_server',
+        name='controller_server',
         output='screen',
         parameters=[controller_params_file, costmap_params_file],
         remappings=[('cmd_vel', 'cmd_vel_raw')]

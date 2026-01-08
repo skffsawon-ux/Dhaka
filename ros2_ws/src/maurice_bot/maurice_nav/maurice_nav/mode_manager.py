@@ -34,19 +34,19 @@ bt_node = 'bt_navigator'
 modes_nodes = {
     'mapping': ['slam_toolbox'],
     'mapfree': [
-            'mapfree_planner_server',
-            'mapfree_controller_server',
-            'bt_navigator',
-            'behavior_server',
-            'velocity_smoother'
-
+            'null_map_node',
+            'planner_server',  # TBD DO WE WANT TO CLEAR COSTMAPS OR NAH # def has to be unconfigured to reload static map (unless we want to do update topics and stuff. which might be worth doing in iter 2) - do MAP_UPDATES
+            'controller_server',  # doesn't have to be deactivated, theoretically action should be cancelled by bt before it dies, and this won't receive a new path to follow - BUT IT HAS COSTMAP!!!
+            'bt_navigator',              # could stay on but underlying actions r gonna fail and be in a weird state; 
+            'behavior_server',            # i guess this can just be deactivated - WHY??
+            'velocity_smoother',           # might be able to leave it running throughout any changes
     ],
     'navigation': [                      # on map switch
             'navigation_map_server',      # load_map topic 
             'navigation_grid_localizer',  # localize Trigger service - USE THE TRIGGER SERVICE AND RELOAD MAP SERVICE
             'navigation_amcl',            # either restart or make sure its not first_map_only and send /map and /initialpose
-            'navigation_planner_server',  # TBD DO WE WANT TO CLEAR COSTMAPS OR NAH # def has to be unconfigured to reload static map (unless we want to do update topics and stuff. which might be worth doing in iter 2) - do MAP_UPDATES
-            'navigation_controller_server',  # doesn't have to be deactivated, theoretically action should be cancelled by bt before it dies, and this won't receive a new path to follow - BUT IT HAS COSTMAP!!!
+            'planner_server',  # TBD DO WE WANT TO CLEAR COSTMAPS OR NAH # def has to be unconfigured to reload static map (unless we want to do update topics and stuff. which might be worth doing in iter 2) - do MAP_UPDATES
+            'controller_server',  # doesn't have to be deactivated, theoretically action should be cancelled by bt before it dies, and this won't receive a new path to follow - BUT IT HAS COSTMAP!!!
             'bt_navigator',              # could stay on but underlying actions r gonna fail and be in a weird state; 
             'behavior_server',            # i guess this can just be deactivated - WHY??
             'velocity_smoother',           # might be able to leave it running throughout any changes
@@ -490,10 +490,19 @@ class ModeManager(Node):
             self.get_logger().info(f"Requesting {mode.value} mode startup")
             
             # Stop other modes first
-            for other_mode in NavigationMode:
-                if other_mode != mode:
-                    self.shutdown_mode(other_mode.value)
-            self.get_logger().info(f"Shut down other nodes")
+            # for other_mode in NavigationMode:
+            #     if other_mode != mode:
+            #         self.shutdown_mode(other_mode.value)
+            # self.get_logger().info(f"Shut down other nodes")
+
+            all_nodes_except_target = []
+            for mode_name, nodes in modes_nodes.items():
+                all_nodes_except_target.extend(nodes)
+            for node in modes_nodes[mode.value]:
+                # implement this: remove `node` from all_nodes_except_target
+                if node in all_nodes_except_target:
+                    all_nodes_except_target.remove(node)
+            
             
             # Get nodes for this mode
             nodes = modes_nodes.get(mode.value, [])
@@ -503,12 +512,20 @@ class ModeManager(Node):
                 return False, msg
             
             node_names = nodes
+
             
             failures = []
+            for node_name in all_nodes_except_target:
+                # Transition node to unconfigured
+                success = transition_node(self._service_clients, self.get_logger(), node_name, State.PRIMARY_STATE_UNCONFIGURED)
+                if not success:
+                    failures.append(node_name)
+                    self.get_logger().warning(f"Failed to transition {node_name} to unconfigured")
+
             # Phase 1: Configure all nodes in forward order
             self.get_logger().info(f"Configuring {len(node_names)} nodes for {mode.value} mode")
             for node_name in node_names:
-                success = transition_node(self._service_clients, self.get_logger(), node_name, State.PRIMARY_STATE_INACTIVE)
+                success = transition_node(self._service_clients, self.get_logger(), node_name, State.PRIMARY_STATE_INACTIVE, only_up = True)
                 if not success:
                     failures.append(node_name)
                     self.get_logger().warning(f"Failed to configure {node_name}, continuing...")

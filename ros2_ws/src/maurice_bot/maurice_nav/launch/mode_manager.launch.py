@@ -27,9 +27,9 @@ def generate_launch_description():
         PythonLaunchDescriptionSource([maurice_nav_launch_dir, '/navigation.launch.py'])
     )
     
-    mapfree_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([maurice_nav_launch_dir, '/mapfree_local_nav.launch.py'])
-    )
+    # mapfree_launch = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource([maurice_nav_launch_dir, '/mapfree_local_nav.launch.py'])
+    # )
     
     mapping_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([maurice_nav_launch_dir, '/mapping.launch.py'])
@@ -69,9 +69,18 @@ def generate_launch_description():
         remappings=[('cmd_vel', 'cmd_vel_raw')]
     )
     
+    # Null map node for identity map->odom transform
+    null_map_node = Node(
+        package='maurice_nav',
+        executable='null_map_node',
+        name='null_map_node',
+        output='screen'
+    )
+    
     return LaunchDescription([
+        null_map_node,
         navigation_launch,
-        mapfree_launch,
+        # mapfree_launch,
         mapping_launch,
         velocity_smoother_node,
         bt_navigator_node,
