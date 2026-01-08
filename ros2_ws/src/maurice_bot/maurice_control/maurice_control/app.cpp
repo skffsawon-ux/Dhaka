@@ -168,6 +168,73 @@ std::string nmcli_get_active_wifi_ssid() {
 }
 
 /**
+ * Sanitize hostname to follow DNS rules:
+ * - Only letters (a-z), numbers (0-9), and hyphens (-)
+ * - Cannot start or end with hyphens
+ * - Max 63 characters
+ */
+std::string sanitize_hostname(const std::string& hostname) {
+    if (hostname.empty()) return "mars";
+    
+    std::string result;
+    result.reserve(hostname.length());
+    
+    // Convert to lowercase and replace invalid chars with hyphens
+    for (char c : hostname) {
+        if (std::isalnum(c)) {
+            result += std::tolower(c);
+        } else {
+            result += '-';
+        }
+    }
+    
+    // Remove consecutive hyphens
+    result.erase(std::unique(result.begin(), result.end(), 
+        [](char a, char b) { return a == '-' && b == '-'; }), result.end());
+    
+    // Trim leading/trailing hyphens
+    size_t start = result.find_first_not_of('-');
+    size_t end = result.find_last_not_of('-');
+    if (start == std::string::npos) return "mars";
+    
+    result = result.substr(start, std::min(end - start + 1, size_t(63)));
+    if (result.back() == '-') result.pop_back();
+    
+    return result.empty() ? "mars" : result;
+}
+
+/**
+ * Get current system hostname using hostnamectl command.
+ * Returns the current hostname as a string.
+ */
+std::string get_system_hostname() {
+    return exec_command("sudo hostnamectl hostname --static 2>/dev/null");
+}
+
+/**
+ * Set system hostname using hostnamectl command.
+ * Sets the static hostname using the hostnamectl command-line tool.
+ * Uses sudo to run with elevated privileges.
+ * Returns true on success, false on failure.
+ */
+bool set_system_hostname(const std::string& sanitized_hostname, std::string& error_msg) {
+    // Use sudo hostnamectl to set the hostname
+    std::string cmd = "sudo hostnamectl hostname --static \"" + sanitized_hostname + "\" 2>&1";
+    
+    // Execute the command
+    int exit_code = std::system(cmd.c_str());
+    if (WEXITSTATUS(exit_code) != 0) {
+        error_msg = "Failed to set hostname via hostnamectl";
+        return false;
+    }
+    
+    // Restart avahi-daemon to apply hostname changes to mDNS
+    std::system("sudo systemctl restart avahi-daemon.service 2>/dev/null");
+    
+    return true;
+}
+
+/**
  * Check if system updates are available using innate-update --quick-check.
  * Returns true if updates are available, false otherwise.
  */
@@ -253,6 +320,10 @@ public:
         robot_info_timer_ = this->create_wall_timer(
             1000ms, std::bind(&AppControl::publish_robot_info_callback, this));
 
+        // Timer for syncing system hostname to robot name
+        hostname_sync_timer_ = this->create_wall_timer(
+            30000ms, std::bind(&AppControl::sync_hostname_callback, this));
+
         // Service for setting robot name
         set_robot_name_srv_ = this->create_service<maurice_msgs::srv::SetRobotName>(
             "/set_robot_name",
@@ -301,6 +372,106 @@ private:
         } catch (const YAML::Exception& e) {
             RCLCPP_WARN(rclcpp::get_logger("app_control"), "Failed to load os_config.yaml: %s", e.what());
             app_config_ = json::object();
+        }
+    }
+
+    /**
+     * Get the full path to robot_info.json file.
+     * Returns the absolute path with ~ expansion if needed.
+     */
+    std::string get_robot_info_path() {
+        std::string data_directory_param = this->get_parameter("data_directory").as_string();
+        std::string data_dir = data_directory_param;
+
+        // Expand ~ if present
+        if (!data_dir.empty() && data_dir[0] == '~') {
+            const char* home = std::getenv("HOME");
+            if (home) {
+                data_dir = std::string(home) + data_dir.substr(1);
+            }
+        }
+
+        return data_dir + "/robot_info.json";
+    }
+
+    /**
+     * Get robot_info.json contents, creating file with defaults if it doesn't exist.
+     * Ensures all default keys exist in the file.
+     * Returns the parsed JSON object.
+     */
+    json get_robot_info() {
+        std::string robot_info_file_path = get_robot_info_path();
+        
+        // Ensure data directory exists
+        std::filesystem::path file_path(robot_info_file_path);
+        std::filesystem::create_directories(file_path.parent_path());
+
+        // Define default robot info values
+        std::string default_hw_rev = this->get_parameter("default_hardware_revision").as_string();
+        json default_robot_info = {
+            {"robot_name", "MARS"},
+            {"robot_id", nullptr},
+            {"hardware_revision", default_hw_rev},
+            {"color_variant", "black"}
+        };
+
+        json robot_info;
+
+        // If robot_info.json does not exist, create it with default values
+        if (!std::filesystem::exists(robot_info_file_path)) {
+            std::ofstream out_file(robot_info_file_path);
+            out_file << default_robot_info.dump(2);
+            out_file.close();
+            return default_robot_info;
+        }
+
+        // Read robot_info from file
+        try {
+            std::ifstream in_file(robot_info_file_path);
+            if (!in_file.is_open()) {
+                return default_robot_info;
+            }
+            in_file >> robot_info;
+            in_file.close();
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to read robot_info.json: %s", e.what());
+            return default_robot_info;
+        }
+
+        // Ensure all default keys exist in the JSON, save if any were missing
+        bool updated = false;
+        for (auto& [key, default_value] : default_robot_info.items()) {
+            if (!robot_info.contains(key)) {
+                robot_info[key] = default_value;
+                updated = true;
+            }
+        }
+        if (updated) {
+            std::ofstream out_file(robot_info_file_path);
+            out_file << robot_info.dump(2);
+            out_file.close();
+        }
+
+        return robot_info;
+    }
+
+    /**
+     * Save robot_info JSON object to robot_info.json file.
+     * Returns true on success, false on failure.
+     */
+    bool set_robot_info(const json& robot_info) {
+        try {
+            std::string robot_info_file_path = get_robot_info_path();
+            std::ofstream out_file(robot_info_file_path);
+            if (!out_file.is_open()) {
+                return false;
+            }
+            out_file << robot_info.dump(2);
+            out_file.close();
+            return true;
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to write robot_info.json: %s", e.what());
+            return false;
         }
     }
 
@@ -463,63 +634,13 @@ private:
      * Publishes "{}" if no keys are found or an error occurs.
      */
     void publish_robot_info_callback() {
-        std::string data_directory_param = this->get_parameter("data_directory").as_string();
-        std::string data_dir = data_directory_param;
-
-        // Expand ~ if present
-        if (!data_dir.empty() && data_dir[0] == '~') {
-            const char* home = std::getenv("HOME");
-            if (home) {
-                data_dir = std::string(home) + data_dir.substr(1);
-            }
-        }
-
-        std::string robot_info_file_path = data_dir + "/robot_info.json";
-
         json data_to_publish_dict;
         std::string final_json_string_to_publish = "{}";
 
         try {
-            // Ensure data directory exists
-            std::filesystem::create_directories(data_dir);
-
-            // Define default robot info values
+            // Get robot info (creates file with defaults if needed)
+            json robot_info = get_robot_info();
             std::string default_hw_rev = this->get_parameter("default_hardware_revision").as_string();
-            json default_robot_info = {
-                {"robot_name", "MARS"},
-                {"robot_id", nullptr},
-                {"hardware_revision", default_hw_rev},
-                {"color_variant", "black"}
-            };
-
-            json robot_info;
-
-            // If robot_info.json does not exist, create it with default values
-            if (!std::filesystem::exists(robot_info_file_path)) {
-                std::ofstream out_file(robot_info_file_path);
-                out_file << default_robot_info.dump();
-                out_file.close();
-                robot_info = default_robot_info;
-            } else {
-                // Read robot_info from file
-                std::ifstream in_file(robot_info_file_path);
-                in_file >> robot_info;
-                in_file.close();
-            }
-
-            // Ensure all default keys exist in the JSON, save if any were missing
-            bool updated = false;
-            for (auto& [key, default_value] : default_robot_info.items()) {
-                if (!robot_info.contains(key)) {
-                    robot_info[key] = default_value;
-                    updated = true;
-                }
-            }
-            if (updated) {
-                std::ofstream out_file(robot_info_file_path);
-                out_file << robot_info.dump();
-                out_file.close();
-            }
 
             data_to_publish_dict["robot_name"] = robot_info.value("robot_name", "MARS");
             if (robot_info.contains("robot_id") && !robot_info["robot_id"].is_null()) {
@@ -588,6 +709,42 @@ private:
     }
 
     /**
+     * Timer callback to sync system hostname with robot name from robot_info.json.
+     * Runs every 30 seconds to ensure hostname stays in sync.
+     */
+    void sync_hostname_callback() {
+        try {
+            // Read robot_info from file
+            json robot_info = get_robot_info();
+
+            // Get robot name from JSON
+            std::string robot_name = robot_info.value("robot_name", "");
+            if (robot_name.empty()) {
+                robot_name = "MARS";
+            }
+
+            // Get current system hostname
+            std::string current_hostname = get_system_hostname();
+            std::string sanitized_robot_name = sanitize_hostname(robot_name);
+
+            // Only update if they don't match
+            if (current_hostname != sanitized_robot_name) {
+                std::string error_msg;
+                if (set_system_hostname(sanitized_robot_name, error_msg)) {
+                    RCLCPP_INFO(this->get_logger(), 
+                        "Successfully synced hostname to '%s'", sanitized_robot_name.c_str());
+                } else {
+                    RCLCPP_WARN(this->get_logger(), 
+                        "Failed to sync hostname: %s", error_msg.c_str());
+                }
+            }
+
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Error syncing hostname: %s", e.what());
+        }
+    }
+
+    /**
      * Service callback to change the robot name in robot_info.json.
      */
     void set_robot_name_callback(
@@ -595,40 +752,23 @@ private:
         std::shared_ptr<maurice_msgs::srv::SetRobotName::Response> response) {
 
         try {
-            std::string data_directory_param = this->get_parameter("data_directory").as_string();
-            std::string data_dir = data_directory_param;
-
-            // Expand ~ if present
-            if (!data_dir.empty() && data_dir[0] == '~') {
-                const char* home = std::getenv("HOME");
-                if (home) {
-                    data_dir = std::string(home) + data_dir.substr(1);
-                }
-            }
-
-            std::string robot_info_file_path = data_dir + "/robot_info.json";
-
             // Load current robot_info
-            json robot_info;
-            std::ifstream in_file(robot_info_file_path);
-            if (in_file.is_open()) {
-                in_file >> robot_info;
-                in_file.close();
-            } else {
-                robot_info = json::object();
-            }
+            json robot_info = get_robot_info();
 
             // Update robot name
             std::string old_name = robot_info.value("robot_name", "Not set");
             robot_info["robot_name"] = request->robot_name;
 
             // Save updated robot_info
-            std::ofstream out_file(robot_info_file_path);
-            out_file << robot_info.dump(2);
-            out_file.close();
+            if (!set_robot_info(robot_info)) {
+                response->success = false;
+                response->message = "Failed to save robot_info.json";
+                return;
+            }
 
             response->success = true;
             response->message = "Robot name changed from '" + old_name + "' to '" + request->robot_name + "'";
+            
             RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
 
         } catch (const std::exception& e) {
@@ -721,8 +861,9 @@ private:
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr cmd_pub_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr robot_info_pub_;
 
-    // Timer
+    // Timers
     rclcpp::TimerBase::SharedPtr robot_info_timer_;
+    rclcpp::TimerBase::SharedPtr hostname_sync_timer_;
 
     // Services
     rclcpp::Service<maurice_msgs::srv::SetRobotName>::SharedPtr set_robot_name_srv_;
