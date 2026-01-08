@@ -13,6 +13,8 @@ else
 fi
 source "$(dirname "$0")/setup_dds.zsh"
 
+export ZENOH_CONFIG_OVERRIDE="$ZENOH_ROUTER_CONFIG_OVERRIDE"
+
 # Check if an argument is provided
 if [ -n "$1" ]; then
   # echo "Initiating a satellite zenoh router for debugging"
