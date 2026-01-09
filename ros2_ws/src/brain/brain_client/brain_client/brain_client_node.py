@@ -680,16 +680,29 @@ class BrainClientNode(Node):
 
     def chat_in_callback(self, msg: String):
         data = json.loads(msg.data)
-        self.get_logger().info(f"\033[1;92mReceived brain/chat_in: {data}\033[0m")
+        self.get_logger().info(f"Received brain/chat_in: {data}")
+        
+        if not self.is_brain_active:
+            self.get_logger().warn(
+                "\033[93m[BrainClient] Brain is not active. Skipping chat_in message.\033[0m"
+            )
+            return
+        
         self.chat_history.append(data)
         outgoing_msg = MessageIn(
             type=MessageInType.CHAT_IN, payload={"text": data["text"]}
         )
         self.ws_bridge.send_message(outgoing_msg)
-        self.get_logger().info(f"\033[1;92mSent MessageIn: {outgoing_msg}\033[0m")
+        self.get_logger().info(f"Sent MessageIn: {outgoing_msg}")
 
     def tts_callback(self, msg: String):
         """Handle direct TTS requests from /brain/tts topic."""
+        if not self.is_brain_active:
+            self.get_logger().warn(
+                "\033[93m[BrainClient] Brain is not active. Skipping TTS request.\033[0m"
+            )
+            return
+        
         text = msg.data
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
@@ -697,6 +710,12 @@ class BrainClientNode(Node):
 
     def custom_input_callback(self, msg: String):
         """Handle custom input data from input_manager."""
+        if not self.is_brain_active:
+            self.get_logger().warn(
+                "\033[93m[BrainClient] Brain is not active. Skipping custom input.\033[0m"
+            )
+            return
+        
         try:
             data = json.loads(msg.data)
             self.get_logger().info(
@@ -2177,6 +2196,10 @@ class BrainClientNode(Node):
         # Stop gaze tracker
         self._stop_gaze_tracker()
 
+        # Deactivate all input devices (stops transcription, saves resources)
+        self.active_inputs_pub.publish(String(data=json.dumps({"inputs": []})))
+        self.get_logger().info("🔌 Deactivated all inputs")
+
         # Stop robot motion
         stop_cmd = Twist()
         stop_cmd.linear.x = 0.0
@@ -2229,6 +2252,7 @@ class BrainClientNode(Node):
 
         self._unregister_primitives()
         self.register_primitives_and_directive()
+        self.activate_directive_inputs()
         self.ready_for_image = True
 
         self.get_logger().info(
