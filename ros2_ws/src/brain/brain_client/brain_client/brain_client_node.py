@@ -713,11 +713,6 @@ class BrainClientNode(Node):
 
     def tts_callback(self, msg: String):
         """Handle direct TTS requests from /brain/tts topic."""
-        if not self.is_brain_active:
-            self.get_logger().warn(
-                "\033[93m[BrainClient] Brain is not active. Skipping TTS request.\033[0m"
-            )
-            return
         
         text = msg.data
         if text and text.strip():
