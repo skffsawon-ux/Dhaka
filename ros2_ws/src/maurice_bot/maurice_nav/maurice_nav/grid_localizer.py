@@ -79,6 +79,9 @@ class GridLocalizer(Node):
     _auto_done: bool = False
     _auto_localize_enabled: bool = False
     
+    # Node state tracking
+    _is_active: bool = False
+    
     # Parameters (declared in on_configure)
     sample_dist = None
     angle_samples = None
@@ -163,6 +166,9 @@ class GridLocalizer(Node):
         """Inactive → Active: Enable lifecycle publishers and start auto-localize timer."""
         self.get_logger().info('Grid localizer activated.')
         
+        # Mark node as active
+        self._is_active = True
+        
         # Create bond connection to lifecycle manager
         self._create_bond()
         
@@ -180,6 +186,9 @@ class GridLocalizer(Node):
 
     def on_deactivate(self, state: State) -> TransitionCallbackReturn:
         """Active → Inactive: Disable lifecycle publishers and stop auto-localize timer."""
+        # Mark node as inactive
+        self._is_active = False
+        
         # Cancel timers first
         if self._auto_timer:
             self._auto_timer.cancel()
@@ -541,9 +550,9 @@ class GridLocalizer(Node):
     def _localize_cb(self, request, response):
         """Service callback to trigger localization."""
         # Check if node is active
-        if self.get_current_state().id != State.PRIMARY_STATE_ACTIVE:
+        if not self._is_active:
             response.success = False
-            response.message = f'Node not active (current state: {self.get_current_state().label})'
+            response.message = 'Node not active'
             return response
         
         if not self.map_received:
