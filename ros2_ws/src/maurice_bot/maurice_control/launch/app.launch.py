@@ -34,8 +34,8 @@ def generate_launch_description():
         }]
     )
 
-    # Return LaunchDescription with both nodes
+    # Return LaunchDescription with all nodes
     return LaunchDescription([
         rosbridge_node,
-        app_node
+        app_node,
     ])

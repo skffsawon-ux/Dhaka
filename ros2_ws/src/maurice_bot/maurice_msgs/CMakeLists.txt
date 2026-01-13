@@ -36,6 +36,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetRobotName.srv"
   "srv/GridLocalize.srv"
   "srv/TriggerUpdate.srv"
+  "srv/Shutdown.srv"
   DEPENDENCIES
     std_msgs
     std_srvs
