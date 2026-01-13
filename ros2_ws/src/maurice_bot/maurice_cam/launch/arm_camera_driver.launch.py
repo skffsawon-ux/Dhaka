@@ -12,8 +12,8 @@ def generate_launch_description():
     # Declare launch arguments
     camera_symlink_arg = DeclareLaunchArgument(
         'camera_symlink',
-        default_value='usb-Arducam_Technology_Co.__Ltd._Arducam_USB_Camera_UC684-video-index0',
-        description='Camera symlink name in /dev/v4l/by-id/'
+        default_value='Arducam',
+        description='Camera symlink pattern (searches for symlinks containing this pattern in /dev/v4l/by-id/)'
     )
     
     width_arg = DeclareLaunchArgument(

@@ -50,8 +50,8 @@ def generate_launch_description():
     # Main camera parameters
     main_camera_symlink_arg = DeclareLaunchArgument(
         'main_camera_symlink',
-        default_value='usb-3D_USB_Camera_3D_USB_Camera_01.00.00-video-index0',
-        description='Main camera device symlink'
+        default_value='3D',
+        description='Main camera device symlink pattern (searches for symlinks containing this pattern)'
     )
     
     main_camera_width_arg = DeclareLaunchArgument(
@@ -227,8 +227,8 @@ def generate_launch_description():
     # Arm camera parameters
     arm_camera_symlink_arg = DeclareLaunchArgument(
         'arm_camera_symlink',
-        default_value='usb-Arducam_Technology_Co.__Ltd._Arducam_USB_Camera_UC684-video-index0',
-        description='Arm camera device symlink'
+        default_value='Arducam',
+        description='Arm camera device symlink pattern (searches for symlinks containing this pattern)'
     )
     
     arm_camera_width_arg = DeclareLaunchArgument(

@@ -12,8 +12,8 @@ def generate_launch_description():
     # Declare launch arguments
     camera_symlink_arg = DeclareLaunchArgument(
         'camera_symlink',
-        default_value='usb-3D_USB_Camera_3D_USB_Camera_01.00.00-video-index0',
-        description='Camera symlink name in /dev/v4l/by-id/'
+        default_value='3D',
+        description='Camera symlink pattern (searches for symlinks containing this pattern in /dev/v4l/by-id/)'
     )
     
     width_arg = DeclareLaunchArgument(

@@ -10,7 +10,7 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
 : Node("main_camera_driver", options)
 {
   // Declare parameters with defaults
-  this->declare_parameter<std::string>("camera_symlink", "usb-3D_USB_Camera_3D_USB_Camera_01.00.00-video-index0");
+  this->declare_parameter<std::string>("camera_symlink", "3D");
   this->declare_parameter<int>("width", 1280);  // Capture at 1280x480 (640x480 per side)
   this->declare_parameter<int>("height", 480);
   this->declare_parameter<int>("publish_left_width", 640);   // Publish left at 640x480
@@ -59,10 +59,28 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   ae_kp_ = this->get_parameter("ae_kp").as_double();
   auto_exposure_update_interval_ = this->get_parameter("auto_exposure_update_interval").as_int();
 
-  // Resolve symlink to device path
-  std::string symlink_path = "/dev/v4l/by-id/" + camera_symlink;
-  if (!std::filesystem::exists(symlink_path)) {
-    RCLCPP_ERROR(this->get_logger(), "Camera symlink not found: %s", symlink_path.c_str());
+  // Find camera symlink by pattern matching
+  std::string camera_pattern = camera_symlink;  // Parameter now contains pattern
+  std::string symlink_path;
+  std::string v4l_dir = "/dev/v4l/by-id/";
+  
+  bool found = false;
+  if (std::filesystem::exists(v4l_dir)) {
+    for (const auto& entry : std::filesystem::directory_iterator(v4l_dir)) {
+      std::string filename = entry.path().filename().string();
+      if (filename.find(camera_pattern) != std::string::npos) {
+        symlink_path = entry.path().string();
+        found = true;
+        RCLCPP_INFO(this->get_logger(), "Found camera symlink matching pattern '%s': %s", 
+                    camera_pattern.c_str(), filename.c_str());
+        break;
+      }
+    }
+  }
+  
+  if (!found) {
+    RCLCPP_ERROR(this->get_logger(), "Camera symlink matching pattern '%s' not found in %s", 
+                 camera_pattern.c_str(), v4l_dir.c_str());
     throw std::runtime_error("Camera symlink not found");
   }
   
@@ -86,7 +104,8 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   left_height_ = publish_stereo_height_;
 
   RCLCPP_INFO(this->get_logger(), "=== Maurice Main Camera Driver ===");
-  RCLCPP_INFO(this->get_logger(), "Camera symlink: %s", camera_symlink.c_str());
+  RCLCPP_INFO(this->get_logger(), "Camera pattern: %s", camera_pattern.c_str());
+  RCLCPP_INFO(this->get_logger(), "Camera symlink: %s", symlink_path.c_str());
   RCLCPP_INFO(this->get_logger(), "Resolved device: %s", camera_device_.c_str());
   RCLCPP_INFO(this->get_logger(), "Capture resolution: %dx%d (full FOV)", capture_width_, capture_height_);
   RCLCPP_INFO(this->get_logger(), "Publish stereo: %dx%d (downscaled in GStreamer)", publish_stereo_width_, publish_stereo_height_);

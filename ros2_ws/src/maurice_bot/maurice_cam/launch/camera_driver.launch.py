@@ -38,7 +38,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'camera_symlink': 'usb-3D_USB_Camera_3D_USB_Camera_01.00.00-video-index0',
+            'camera_symlink': '3D',
             'width': '1280',
             'height': '480',
             'fps': '30.0',
@@ -52,7 +52,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'camera_symlink': 'usb-Arducam_Technology_Co.__Ltd._Arducam_USB_Camera_UC684-video-index0',
+            'camera_symlink': 'Arducam',
             'width': '640',
             'height': '480',
             'fps': '30.0',

@@ -13,7 +13,7 @@ ArmCameraDriver::ArmCameraDriver(const rclcpp::NodeOptions & options)
     RCLCPP_DEBUG(this->get_logger(), "OpenCV version: %s", CV_VERSION);
 
     // Parameters
-    this->declare_parameter<std::string>("camera_symlink", "usb-Arducam_Technology_Co.__Ltd._Arducam_USB_Camera_UC684-video-index0");
+    this->declare_parameter<std::string>("camera_symlink", "Arducam");
     this->declare_parameter<int>("width", 640);
     this->declare_parameter<int>("height", 480);
     this->declare_parameter<double>("fps", 30.0);
@@ -29,11 +29,29 @@ ArmCameraDriver::ArmCameraDriver(const rclcpp::NodeOptions & options)
     publish_compressed_ = this->get_parameter("publish_compressed").as_bool();
     compressed_frame_interval_ = this->get_parameter("compressed_frame_interval").as_int();
 
-    // Resolve symlink to device path
-    std::string symlink_path = "/dev/v4l/by-id/" + camera_symlink;
-    if (!std::filesystem::exists(symlink_path)) {
-        RCLCPP_ERROR(this->get_logger(), "Camera symlink not found: %s", symlink_path.c_str());
-        throw std::runtime_error("Camera symlink not found");
+    // Find camera symlink by pattern matching
+    std::string camera_pattern = camera_symlink;  // Parameter now contains pattern
+    std::string symlink_path;
+    std::string v4l_dir = "/dev/v4l/by-id/";
+    
+    bool found = false;
+    if (std::filesystem::exists(v4l_dir)) {
+      for (const auto& entry : std::filesystem::directory_iterator(v4l_dir)) {
+        std::string filename = entry.path().filename().string();
+        if (filename.find(camera_pattern) != std::string::npos) {
+          symlink_path = entry.path().string();
+          found = true;
+          RCLCPP_INFO(this->get_logger(), "Found camera symlink matching pattern '%s': %s", 
+                      camera_pattern.c_str(), filename.c_str());
+          break;
+        }
+      }
+    }
+    
+    if (!found) {
+      RCLCPP_ERROR(this->get_logger(), "Camera symlink matching pattern '%s' not found in %s", 
+                   camera_pattern.c_str(), v4l_dir.c_str());
+      throw std::runtime_error("Camera symlink not found");
     }
     
     // Resolve the symlink to get actual device path
@@ -49,7 +67,8 @@ ArmCameraDriver::ArmCameraDriver(const rclcpp::NodeOptions & options)
     }
 
     RCLCPP_INFO(this->get_logger(), "=== Maurice Arm Camera Driver ===");
-    RCLCPP_INFO(this->get_logger(), "Camera symlink: %s", camera_symlink.c_str());
+    RCLCPP_INFO(this->get_logger(), "Camera pattern: %s", camera_pattern.c_str());
+    RCLCPP_INFO(this->get_logger(), "Camera symlink: %s", symlink_path.c_str());
     RCLCPP_INFO(this->get_logger(), "Resolved device: %s", device_path_.c_str());
     RCLCPP_INFO(this->get_logger(), "Resolution: %dx%d", width_, height_);
     RCLCPP_INFO(this->get_logger(), "FPS: %d", fps_);
