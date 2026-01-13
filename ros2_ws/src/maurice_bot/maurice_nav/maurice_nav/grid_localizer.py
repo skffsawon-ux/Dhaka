@@ -43,7 +43,6 @@ from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_srvs.srv import Trigger
 from std_msgs.msg import String
-from bondpy import bondpy
 
 import cupy as cp
 
@@ -59,7 +58,6 @@ class GridLocalizer(Node):
     srv = None
     _auto_timer = None
     _map_check_timer = None
-    bond = None
     
     # Map state
     map_received: bool = False
@@ -89,7 +87,6 @@ class GridLocalizer(Node):
     batch_size = None
     auto_timeout = None
     score_threshold = None
-    bond_heartbeat_period = None
     
     def __init__(self, node_name='grid_localizer', **kwargs):
         super().__init__(node_name, **kwargs)
@@ -105,7 +102,6 @@ class GridLocalizer(Node):
             self.declare_parameter('auto_localize_timeout', 30.0)  # seconds
             self.declare_parameter('max_score_threshold', 0.3)  # lower = stricter match
             self.declare_parameter('auto_localize', True)  # enable auto-localize on startup
-            self.declare_parameter('bond_heartbeat_period', 0.25)  # bond heartbeat period
         
         self.sample_dist = self.get_parameter('sample_distance').value
         self.angle_samples = self.get_parameter('angle_samples').value
@@ -115,7 +111,6 @@ class GridLocalizer(Node):
         self.auto_timeout = self.get_parameter('auto_localize_timeout').value
         self.score_threshold = self.get_parameter('max_score_threshold').value
         auto_localize = self.get_parameter('auto_localize').value
-        self.bond_heartbeat_period = self.get_parameter('bond_heartbeat_period').value
         
         # Reset map state
         self.map_received = False
@@ -169,9 +164,6 @@ class GridLocalizer(Node):
         # Mark node as active
         self._is_active = True
         
-        # Create bond connection to lifecycle manager
-        self._create_bond()
-        
         # Start map check timer if map not received yet
         if not self.map_received and self._map_check_timer is None:
             self._map_check_timer = self.create_timer(1.0, self._check_map_publisher)
@@ -195,45 +187,13 @@ class GridLocalizer(Node):
         if self._map_check_timer:
             self._map_check_timer.cancel()
         
-        # # Destroy bond connection
-        self._destroy_bond()
-        
         self.get_logger().info('Grid localizer deactivated.')
         # This call automatically deactivates lifecycle publishers (pose_pub and status_pub)
         return super().on_deactivate(state)
 
-    def _create_bond(self):
-        return
-        """Create bond connection to lifecycle manager."""
-        if self.bond_heartbeat_period > 0.0:
-            self.get_logger().info(f'Creating bond ({self.get_name()}) to lifecycle manager.')
-            self.bond = bondpy.Bond(
-                self,
-                '/bond',
-                self.get_name()
-            )
-            self.bond.set_heartbeat_period(self.bond_heartbeat_period)
-            self.bond.set_heartbeat_timeout(4.0)
-            self.bond.start()
-    
-    def _destroy_bond(self):
-        """Destroy bond connection to lifecycle manager."""
-        if self.bond is not None:
-            self.get_logger().info(f'Destroying bond ({self.get_name()}) to lifecycle manager.')
-            try:
-                self.bond.shutdown()
-            except rclpy._rclpy_pybind11.InvalidHandle:
-                # Bond already destroyed, this is fine
-                pass
-            except Exception as e:
-                # Log and re-raise any other errors
-                self.get_logger().error(f'Error destroying bond: {e}')
-                raise
-            self.bond = None
     def _cleanup_resources(self):
         """Helper method to clean up all node resources."""
         self.get_logger().info('Attempting to clean up Grid Localizer')
-        self._destroy_bond()
         # Destroy timers
         if self._auto_timer:
             self.destroy_timer(self._auto_timer)
@@ -696,19 +656,13 @@ class GridLocalizer(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    
-    # executor = SingleThreadedExecutor()
     lc_node = GridLocalizer('grid_localizer')
-    # executor.add_node(lc_node)
-    
     try:
         rclpy.spin(lc_node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         rclpy.shutdown()
-        #lc_node.destroy_node()
-        #rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
