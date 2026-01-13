@@ -34,24 +34,42 @@ ArmCameraDriver::ArmCameraDriver(const rclcpp::NodeOptions & options)
     std::string symlink_path;
     std::string v4l_dir = "/dev/v4l/by-id/";
     
-    bool found = false;
+    std::vector<std::string> matching_symlinks;
     if (std::filesystem::exists(v4l_dir)) {
       for (const auto& entry : std::filesystem::directory_iterator(v4l_dir)) {
         std::string filename = entry.path().filename().string();
         if (filename.find(camera_pattern) != std::string::npos) {
-          symlink_path = entry.path().string();
-          found = true;
-          RCLCPP_INFO(this->get_logger(), "Found camera symlink matching pattern '%s': %s", 
-                      camera_pattern.c_str(), filename.c_str());
-          break;
+          matching_symlinks.push_back(entry.path().string());
         }
       }
     }
     
-    if (!found) {
+    if (matching_symlinks.empty()) {
       RCLCPP_ERROR(this->get_logger(), "Camera symlink matching pattern '%s' not found in %s", 
                    camera_pattern.c_str(), v4l_dir.c_str());
       throw std::runtime_error("Camera symlink not found");
+    }
+    
+    // Prefer -video-index0 if available (typically the capture device)
+    // Otherwise use the first match
+    bool found_index0 = false;
+    for (const auto& symlink : matching_symlinks) {
+      std::string filename = std::filesystem::path(symlink).filename().string();
+      if (filename.find("-video-index0") != std::string::npos) {
+        symlink_path = symlink;
+        found_index0 = true;
+        RCLCPP_INFO(this->get_logger(), "Found camera symlink matching pattern '%s': %s (preferred -video-index0)", 
+                    camera_pattern.c_str(), filename.c_str());
+        break;
+      }
+    }
+    
+    if (!found_index0) {
+      // Fall back to first match
+      symlink_path = matching_symlinks[0];
+      std::string filename = std::filesystem::path(symlink_path).filename().string();
+      RCLCPP_INFO(this->get_logger(), "Found camera symlink matching pattern '%s': %s (no -video-index0 found, using first match)", 
+                  camera_pattern.c_str(), filename.c_str());
     }
     
     // Resolve the symlink to get actual device path
