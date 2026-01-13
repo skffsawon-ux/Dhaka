@@ -24,9 +24,11 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("stereo_topic", "/mars/main_camera/stereo");
   this->declare_parameter<std::string>("depth_topic", "/mars/main_camera/depth");
   this->declare_parameter<std::string>("disparity_topic", "/mars/main_camera/disparity");
+  this->declare_parameter<std::string>("rectified_topic", "/mars/main_camera/stereo_rectified");
   this->declare_parameter<std::string>("frame_id", "camera_optical_frame");
   this->declare_parameter<int>("max_disparity", 80);
   this->declare_parameter<bool>("publish_disparity", false);
+  this->declare_parameter<bool>("publish_rectified", false);
   this->declare_parameter<int>("stereo_width", 1280);  // Input at 1280x480 (640x480 per camera)
   this->declare_parameter<int>("stereo_height", 480);
   this->declare_parameter<int>("process_every_n_frames", 1);  // 1 = process every frame
@@ -44,9 +46,11 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   stereo_topic_ = this->get_parameter("stereo_topic").as_string();
   depth_topic_ = this->get_parameter("depth_topic").as_string();
   disparity_topic_ = this->get_parameter("disparity_topic").as_string();
+  rectified_topic_ = this->get_parameter("rectified_topic").as_string();
   frame_id_ = this->get_parameter("frame_id").as_string();
   max_disparity_ = this->get_parameter("max_disparity").as_int();
   publish_disparity_ = this->get_parameter("publish_disparity").as_bool();
+  publish_rectified_ = this->get_parameter("publish_rectified").as_bool();
   stereo_width_ = this->get_parameter("stereo_width").as_int();
   stereo_height_ = this->get_parameter("stereo_height").as_int();
   process_every_n_frames_ = this->get_parameter("process_every_n_frames").as_int();
@@ -113,6 +117,14 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
       disparity_topic_,
       rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
     );
+  }
+
+  if (publish_rectified_) {
+    rectified_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+      rectified_topic_,
+      rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
+    );
+    RCLCPP_INFO(this->get_logger(), "Rectified images enabled: %s", rectified_topic_.c_str());
   }
 
   if (publish_pointcloud_) {
@@ -260,6 +272,7 @@ bool StereoDepthEstimator::loadCalibration(const std::filesystem::path& calib_pa
               focal_length_, baseline_, baseline_ * 1000.0);
 
   // Compute OpenCV rectification maps at CALIBRATION resolution
+  // Maps are computed for unrotated images (calibration coordinate system)
   cv::initUndistortRectifyMap(K1_, D1_, R1_, P1_, 
                                cv::Size(calib_width_, calib_height_),
                                CV_32FC1, map1_left_, map2_left_);
@@ -390,19 +403,23 @@ void StereoDepthEstimator::stereoImageCallback(sensor_msgs::msg::Image::UniquePt
 
 void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcpp::Time& timestamp)
 {
-  // Split stereo frame into left and right images
-  // After 180° rotation in main_camera_driver:
-  //   - First half (x=0 to width) = original RIGHT camera
-  //   - Second half (x=width to 2*width) = original LEFT camera
-  cv::Mat left_img = stereo_frame(cv::Rect(0, 0, image_width_, image_height_));
-  cv::Mat right_img = stereo_frame(cv::Rect(image_width_, 0, image_width_, image_height_));
+  // ===== STEP 0: Unrotate entire stereo frame to match calibration coordinate system =====
+  // Calibration was done on unrotated images, but camera driver rotates 180° (camera mounted upside down).
+  // We unrotate for rectification, then rotate back to get the correct view.
+  cv::Mat stereo_unrotated;
+  cv::rotate(stereo_frame, stereo_unrotated, cv::ROTATE_180);
 
-  // ===== STEP 1: Downscale to calibration resolution =====
+  // ===== STEP 1: Split stereo frame into left and right images =====
+  // After unrotation, first half = original LEFT camera, second half = original RIGHT camera
+  cv::Mat left_img = stereo_unrotated(cv::Rect(0, 0, image_width_, image_height_));
+  cv::Mat right_img = stereo_unrotated(cv::Rect(image_width_, 0, image_width_, image_height_));
+
+  // ===== STEP 2: Downscale to calibration resolution =====
   cv::Mat left_scaled, right_scaled;
   cv::resize(left_img, left_scaled, cv::Size(calib_width_, calib_height_), 0, 0, cv::INTER_LINEAR);
   cv::resize(right_img, right_scaled, cv::Size(calib_width_, calib_height_), 0, 0, cv::INTER_LINEAR);
 
-  // ===== STEP 2: Convert to grayscale =====
+  // ===== STEP 3: Convert to grayscale =====
   cv::Mat left_gray, right_gray;
   if (stereo_frame.channels() == 3) {
     cv::cvtColor(left_scaled, left_gray, cv::COLOR_BGR2GRAY);
@@ -412,13 +429,41 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
     right_gray = right_scaled;
   }
 
-  // ===== STEP 3: Rectify using OpenCV (like Python script) =====
-  // Swap maps: left_img (original RIGHT) needs map1_right_, right_img (original LEFT) needs map1_left_
+  // ===== STEP 4: Rectify using OpenCV =====
+  // After unrotation, left_img is the actual LEFT camera, right_img is the actual RIGHT camera
+  // Use map1_left_ for left and map1_right_ for right
+  // NOTE: Keep rectified images in calibration coordinate system for stereo matching
+  // (epipolar lines must be horizontal). We'll rotate the final depth output instead.
   cv::Mat left_rect, right_rect;
-  cv::remap(left_gray, left_rect, map1_right_, map2_right_, cv::INTER_LINEAR);
-  cv::remap(right_gray, right_rect, map1_left_, map2_left_, cv::INTER_LINEAR);
+  cv::remap(left_gray, left_rect, map1_left_, map2_left_, cv::INTER_LINEAR);
+  cv::remap(right_gray, right_rect, map1_right_, map2_right_, cv::INTER_LINEAR);
 
-  // ===== STEP 4: Wrap rectified images for VPI =====
+  // Publish rectified left image if enabled (before wrapping for VPI)
+  // Left image overlaps with the depth output
+  // Rotate it back to correct view for publishing
+  if (publish_rectified_ && rectified_pub_) {
+    // Upscale left rectified image to input resolution
+    cv::Mat left_rect_full;
+    cv::resize(left_rect, left_rect_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_LINEAR);
+    
+    // Rotate back to correct view for publishing
+    cv::rotate(left_rect_full, left_rect_full, cv::ROTATE_180);
+    
+    auto rectified_msg = std::make_unique<sensor_msgs::msg::Image>();
+    rectified_msg->header.stamp = timestamp;
+    rectified_msg->header.frame_id = frame_id_;
+    rectified_msg->height = image_height_;
+    rectified_msg->width = image_width_;
+    rectified_msg->encoding = "mono8";
+    rectified_msg->is_bigendian = false;
+    rectified_msg->step = image_width_;
+    rectified_msg->data.resize(rectified_msg->height * rectified_msg->step);
+    memcpy(rectified_msg->data.data(), left_rect_full.data, rectified_msg->data.size());
+    
+    rectified_pub_->publish(std::move(rectified_msg));
+  }
+
+  // ===== STEP 5: Wrap rectified images for VPI =====
   VPIImage vpi_left_wrap = nullptr;
   VPIImage vpi_right_wrap = nullptr;
   VPIStatus status;
@@ -438,7 +483,7 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
     return;
   }
 
-  // ===== STEP 5: Compute stereo disparity using VPI Block Matching =====
+  // ===== STEP 6: Compute stereo disparity using VPI Block Matching =====
   VPIStereoDisparityEstimatorParams stereo_params;
   vpiInitStereoDisparityEstimatorParams(&stereo_params);
   stereo_params.maxDisparity = max_disparity_;
@@ -459,7 +504,7 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
   // Synchronize
   vpiStreamSync(vpi_stream_);
 
-  // ===== STEP 6: Lock disparity and convert to depth using reprojectImageTo3D =====
+  // ===== STEP 7: Lock disparity and convert to depth using reprojectImageTo3D =====
   VPIImageData disparity_data;
   status = vpiImageLockData(vpi_disparity_, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &disparity_data);
   if (status != VPI_SUCCESS) {
@@ -525,11 +570,14 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
     }
   }
 
-  // ===== STEP 7: Upscale depth to input resolution =====
+  // ===== STEP 8: Upscale depth to input resolution =====
   cv::Mat depth_full;
   cv::resize(depth_calib, depth_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_NEAREST);
+  
+  // Rotate depth image back 180° to get the correct view (camera is mounted upside down)
+  cv::rotate(depth_full, depth_full, cv::ROTATE_180);
 
-  // ===== STEP 8: Create and publish depth message =====
+  // ===== STEP 9: Create and publish depth message =====
   auto depth_msg = std::make_unique<sensor_msgs::msg::Image>();
   depth_msg->header.stamp = timestamp;
   depth_msg->header.frame_id = frame_id_;

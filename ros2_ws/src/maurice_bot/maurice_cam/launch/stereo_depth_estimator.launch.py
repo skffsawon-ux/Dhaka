@@ -87,6 +87,18 @@ def generate_launch_description():
         description='Publish disparity visualization image'
     )
     
+    rectified_topic_arg = DeclareLaunchArgument(
+        'rectified_topic',
+        default_value='/mars/main_camera/stereo_rectified',
+        description='Output rectified left image topic (mono8, matches depth image)'
+    )
+    
+    publish_rectified_arg = DeclareLaunchArgument(
+        'publish_rectified',
+        default_value='false',
+        description='Publish rectified left image (overlaps with depth output)'
+    )
+    
     stereo_width_arg = DeclareLaunchArgument(
         'stereo_width',
         default_value='1280',
@@ -149,9 +161,11 @@ def generate_launch_description():
         'stereo_topic': LaunchConfiguration('stereo_topic'),
         'depth_topic': LaunchConfiguration('depth_topic'),
         'disparity_topic': LaunchConfiguration('disparity_topic'),
+        'rectified_topic': LaunchConfiguration('rectified_topic'),
         'frame_id': LaunchConfiguration('frame_id'),
         'max_disparity': LaunchConfiguration('max_disparity'),
         'publish_disparity': LaunchConfiguration('publish_disparity'),
+        'publish_rectified': LaunchConfiguration('publish_rectified'),
         'stereo_width': LaunchConfiguration('stereo_width'),
         'stereo_height': LaunchConfiguration('stereo_height'),
         'process_every_n_frames': LaunchConfiguration('process_every_n_frames'),
@@ -202,6 +216,8 @@ def generate_launch_description():
         stereo_topic_arg,
         depth_topic_arg,
         disparity_topic_arg,
+        rectified_topic_arg,
+        publish_rectified_arg,
         frame_id_arg,
         max_disparity_arg,
         publish_disparity_arg,

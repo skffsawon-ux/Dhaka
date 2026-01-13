@@ -89,6 +89,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr stereo_sub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr disparity_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr rectified_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
 
   // Node parameters
@@ -96,10 +97,12 @@ private:
   std::string stereo_topic_;
   std::string depth_topic_;
   std::string disparity_topic_;
+  std::string rectified_topic_;
   std::string pointcloud_topic_;
   std::string frame_id_;
   int max_disparity_;
   bool publish_disparity_;
+  bool publish_rectified_;
   bool publish_pointcloud_;
   int process_every_n_frames_;  // Process 1 out of every N frames
   int pointcloud_decimation_;   // Decimate point cloud (1=full, 2=half, 4=quarter)
