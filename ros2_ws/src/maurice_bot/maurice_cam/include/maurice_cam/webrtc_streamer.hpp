@@ -1,11 +1,12 @@
-#ifndef INNATE_WEBRTC_STREAMER__WEBRTC_STREAMER_HPP_
-#define INNATE_WEBRTC_STREAMER__WEBRTC_STREAMER_HPP_
+#ifndef MAURICE_CAM__WEBRTC_STREAMER_HPP_
+#define MAURICE_CAM__WEBRTC_STREAMER_HPP_
 
 #define GST_USE_UNSTABLE_API
 
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_components/register_node_macro.hpp>
 #include <std_msgs/msg/string.hpp>
-#include <sensor_msgs/msg/compressed_image.hpp>
+#include <sensor_msgs/msg/image.hpp>
 
 #include <gst/gst.h>
 #include <gst/webrtc/webrtc.h>
@@ -18,13 +19,13 @@
 #include <memory>
 #include <mutex>
 
-namespace innate_webrtc_streamer
+namespace maurice_cam
 {
 
 class WebRTCStreamer : public rclcpp::Node
 {
 public:
-  WebRTCStreamer();
+  explicit WebRTCStreamer(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
   ~WebRTCStreamer();
 
 private:
@@ -32,8 +33,8 @@ private:
   void on_start(const std_msgs::msg::String::SharedPtr msg);
   void on_answer(const std_msgs::msg::String::SharedPtr msg);
   void on_ice_in(const std_msgs::msg::String::SharedPtr msg);
-  void on_image_main(const sensor_msgs::msg::CompressedImage::SharedPtr msg);
-  void on_image_arm(const sensor_msgs::msg::CompressedImage::SharedPtr msg);
+  void on_image_main(const sensor_msgs::msg::Image::SharedPtr msg);
+  void on_image_arm(const sensor_msgs::msg::Image::SharedPtr msg);
 
   // GStreamer callbacks (static for C callback interface)
   static void on_ice_candidate(GstElement* webrtc, guint mline, gchar* candidate, gpointer user_data);
@@ -45,8 +46,9 @@ private:
   void create_subscriptions(const std::string& source);
   void destroy_subscriptions();
   void cleanup_pipeline();
-  cv::Mat process_image(const sensor_msgs::msg::CompressedImage::SharedPtr& msg, int target_width, int target_height);
-  void push_frame(GstElement* appsrc, const cv::Mat& frame);
+  cv::Mat process_image(const sensor_msgs::msg::Image::SharedPtr& msg, int target_width, int target_height);
+  void push_frame(GstElement* appsrc, const cv::Mat& frame, GstBufferPool* pool);
+  GstBufferPool* create_frame_pool(int width, int height, int channels);
 
   // Publishers
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr offer_pub_;
@@ -56,14 +58,18 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr answer_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr ice_in_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr start_sub_;
-  rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr image_sub_main_;
-  rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr image_sub_arm_;
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_main_;
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_arm_;
 
   // GStreamer elements (initialized first in constructor)
   GstElement* pipeline_;
   GstElement* webrtc_;
   GstElement* appsrc_main_;
   GstElement* appsrc_arm_;
+
+  // Buffer pools for zero-alloc frame pushing
+  GstBufferPool* pool_main_;
+  GstBufferPool* pool_arm_;
 
   // Source mode (initialized early)
   std::string current_source_;
@@ -81,6 +87,7 @@ private:
   std::mutex pipeline_mutex_;
 };
 
-}  // namespace innate_webrtc_streamer
+}  // namespace maurice_cam
 
-#endif  // INNATE_WEBRTC_STREAMER__WEBRTC_STREAMER_HPP_
+#endif  // MAURICE_CAM__WEBRTC_STREAMER_HPP_
+

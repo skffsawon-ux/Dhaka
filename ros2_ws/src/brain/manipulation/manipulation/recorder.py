@@ -7,7 +7,7 @@ from brain_messages.srv import ManipulationTask
 from manipulation.DataUtils import EpisodeData, TaskManager
 
 # Import message types for sensor data
-from sensor_msgs.msg import Image, JointState, CompressedImage
+from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Float64MultiArray
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
@@ -150,15 +150,15 @@ class RecorderNode(Node):
         self.replay_episode_id = ""
         self.replay_timer = None
         
-        # Replay publishers (CompressedImage for WebRTC compatibility)
+        # Replay publishers (raw Image for WebRTC compatibility)
         self.replay_main_pub = self.create_publisher(
-            CompressedImage, 
-            '/brain/recorder/replay/main_camera/compressed', 
+            Image, 
+            '/brain/recorder/replay/main_camera/image', 
             10
         )
         self.replay_arm_pub = self.create_publisher(
-            CompressedImage, 
-            '/brain/recorder/replay/arm_camera/compressed', 
+            Image, 
+            '/brain/recorder/replay/arm_camera/image_raw', 
             10
         )
         self.replay_status_pub = self.create_publisher(
@@ -824,24 +824,16 @@ class RecorderNode(Node):
             # Get the frame (numpy array, likely BGR or RGB)
             frame = self.replay_buffer[cam_name][self.replay_frame_index]
             
-            # Encode as JPEG for CompressedImage
+            # Publish as raw Image
             try:
                 # Ensure frame is uint8
                 if frame.dtype != np.uint8:
                     frame = frame.astype(np.uint8)
                 
-                # Encode to JPEG
-                success, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                if not success:
-                    self.get_logger().warn(f"Failed to encode frame for {cam_name}")
-                    continue
-                
-                # Create CompressedImage message
-                msg = CompressedImage()
+                # Create Image message using cv_bridge
+                msg = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
                 msg.header.stamp = self.get_clock().now().to_msg()
                 msg.header.frame_id = cam_name
-                msg.format = "jpeg"
-                msg.data = encoded.tobytes()
                 
                 # Publish to appropriate topic
                 # camera_1 -> main, camera_2 -> arm (based on typical setup)

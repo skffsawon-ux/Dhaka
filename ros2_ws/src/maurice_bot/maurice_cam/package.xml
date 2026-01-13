@@ -3,7 +3,7 @@
 <package format="3">
   <name>maurice_cam</name>
   <version>0.0.1</version>
-  <description>Maurice camera driver package with GStreamer and OpenCV support</description>
+  <description>Maurice camera driver package with GStreamer, OpenCV, and WebRTC streaming support</description>
   <maintainer email="vignesh@innate.bot">vignesh_anand</maintainer>
   <license>Apache-2.0</license>
 
@@ -11,10 +11,25 @@
   <buildtool_depend>ament_cmake_python</buildtool_depend>
 
   <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
-  <depend>cv_bridge</depend>
+  <depend>std_msgs</depend>
   <depend>image_transport</depend>
+  <depend>cv_bridge</depend>
   <depend>OpenCV</depend>
+
+  <!-- WebRTC streamer system dependencies -->
+  <build_depend>libopencv-dev</build_depend>
+  <build_depend>libgstreamer1.0-dev</build_depend>
+  <build_depend>libgstreamer-plugins-base1.0-dev</build_depend>
+  <build_depend>gstreamer1.0-plugins-good</build_depend>
+  <build_depend>gstreamer1.0-plugins-bad</build_depend>
+  <build_depend>gstreamer1.0-nice</build_depend>
+  <build_depend>nlohmann-json3-dev</build_depend>
+
+  <!-- Stereo depth estimator dependencies (NVIDIA VPI) -->
+  <!-- VPI is installed at /opt/nvidia/vpi3 on Jetson platforms -->
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

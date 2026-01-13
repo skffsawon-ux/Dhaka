@@ -12,16 +12,89 @@
 #include <unistd.h>
 #include <errno.h>
 #include <cstring>
+#include <stdexcept>
+
+#include <turbojpeg.h>
 
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp_components/register_node_macro.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
-#include "cv_bridge/cv_bridge.h"
 
 #include <opencv2/opencv.hpp>
 
 namespace maurice_cam
 {
+
+/**
+ * @brief Hardware-accelerated JPEG encoder using libturbojpeg
+ * 
+ * Provides faster JPEG encoding compared to cv::imencode by using
+ * libjpeg-turbo's optimized SIMD routines.
+ */
+class JpegTurboEncoder {
+public:
+  JpegTurboEncoder() {
+    handle_ = tjInitCompress();
+    if (!handle_) throw std::runtime_error("tjInitCompress failed");
+  }
+
+  ~JpegTurboEncoder() {
+    if (handle_) tjDestroy(handle_);
+  }
+
+  // Non-copyable
+  JpegTurboEncoder(const JpegTurboEncoder&) = delete;
+  JpegTurboEncoder& operator=(const JpegTurboEncoder&) = delete;
+
+  /**
+   * @brief Encode BGR8 cv::Mat into JPEG
+   * @param bgr Input BGR image (CV_8UC3)
+   * @param quality JPEG quality (1-100)
+   * @param out Output buffer for compressed JPEG data
+   */
+  void encodeBGR(const cv::Mat& bgr, int quality, std::vector<uint8_t>& out) {
+    if (bgr.empty()) throw std::runtime_error("encodeBGR: empty image");
+    if (bgr.type() != CV_8UC3) throw std::runtime_error("encodeBGR: expected CV_8UC3 (BGR)");
+    
+    if (!bgr.isContinuous()) {
+      // Make it continuous (rare case)
+      cv::Mat tmp = bgr.clone();
+      encodeBGR(tmp, quality, out);
+      return;
+    }
+
+    unsigned char* jpegBuf = nullptr;
+    unsigned long jpegSize = 0;
+
+    // TJSAMP_420 is fastest/most common; TJFLAG_FASTDCT prioritizes speed
+    int flags = TJFLAG_FASTDCT;
+    int rc = tjCompress2(
+      handle_,
+      bgr.data,
+      bgr.cols,
+      0,                // pitch 0 => infer from width * pixelSize (works because continuous)
+      bgr.rows,
+      TJPF_BGR,
+      &jpegBuf,
+      &jpegSize,
+      TJSAMP_420,
+      quality,
+      flags
+    );
+
+    if (rc != 0) {
+      const char* err = tjGetErrorStr2(handle_);
+      throw std::runtime_error(std::string("tjCompress2 failed: ") + (err ? err : ""));
+    }
+
+    out.assign(jpegBuf, jpegBuf + jpegSize);
+    tjFree(jpegBuf);
+  }
+
+private:
+  tjhandle handle_{nullptr};
+};
 
 /**
  * @brief PID-based auto exposure controller with center weighting
@@ -80,23 +153,24 @@ private:
 };
 
 /**
- * @brief GStreamer-based camera driver node for Maurice robot
+ * @brief GStreamer-based main camera driver node for Maurice robot
  * 
- * This node provides a clean interface to capture frames from a USB camera
+ * This node provides a clean interface to capture frames from the main USB camera
  * using GStreamer pipeline and publishes both raw and compressed images.
  */
-class CameraDriver : public rclcpp::Node
+class MainCameraDriver : public rclcpp::Node
 {
 public:
   /**
    * @brief Constructor
+   * @param options Node options for component composition
    */
-  CameraDriver();
+  explicit MainCameraDriver(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
   /**
    * @brief Destructor
    */
-  ~CameraDriver();
+  ~MainCameraDriver();
 
 private:
   /**
@@ -170,13 +244,22 @@ private:
 
   // Camera parameters
   std::string camera_device_;
-  int capture_width_;
+  int capture_width_;      // Capture resolution (full FOV)
   int capture_height_;
-  int left_width_;
+  int left_width_;         // Left camera at capture resolution
   int left_height_;
+  int publish_left_width_;   // Publish left at this resolution
+  int publish_left_height_;
+  int publish_stereo_width_; // Publish stereo at this resolution
+  int publish_stereo_height_;
   double fps_;
   std::string frame_id_;
   int jpeg_quality_;
+
+  // Compressed image publishing settings
+  bool publish_compressed_{true};
+  int compressed_frame_interval_{3};  // Publish compressed every N frames
+  int compressed_frame_counter_{0};
 
   // V4L2 control interface
   int camera_fd_{-1};
@@ -210,6 +293,10 @@ private:
   // Statistics
   std::atomic<int> frame_count_{0};
   std::atomic<bool> camera_initialized_{false};
+
+  // TurboJPEG encoder for faster JPEG compression
+  std::unique_ptr<JpegTurboEncoder> jpeg_encoder_;
 };
 
 } // namespace maurice_cam
+
