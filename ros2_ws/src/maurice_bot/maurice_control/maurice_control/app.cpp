@@ -81,6 +81,12 @@ std::string get_hostname() {
         // Fallback to hostname command
         result = exec_command("hostname 2>/dev/null") + ".local";
     }
+    // Ensure hostname ends with .local
+    const std::string suffix = ".local";
+    if (result.length() < suffix.length() || 
+        result.compare(result.length() - suffix.length(), suffix.length(), suffix) != 0) {
+        result += suffix;
+    }
     return result;
 }
 
