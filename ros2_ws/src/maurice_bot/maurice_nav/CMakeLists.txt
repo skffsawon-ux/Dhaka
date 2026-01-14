@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.5)
 project(maurice_nav)
 
 # Find the ament_cmake package and any dependencies you need
-find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
 find_package(rclpy REQUIRED)  # for Python nodes
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
@@ -33,15 +33,12 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
-# Install the Python modules. This will copy the 'maurice_nav' directory into the installation space.
-install(
-  DIRECTORY maurice_nav
-  DESTINATION lib/${PROJECT_NAME}
-)
-
 # Install Python scripts/programs
+# Install Python modules and scripts
+ament_python_install_package(${PROJECT_NAME})
+
+
 install(PROGRAMS
-  maurice_nav/__init__.py
   maurice_nav/mode_manager.py
   maurice_nav/grid_localizer.py
   DESTINATION lib/${PROJECT_NAME}
