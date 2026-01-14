@@ -449,6 +449,7 @@ void RecorderNode::handle_new_episode(
 
     current_episode_ = std::make_unique<EpisodeData>();
     episode_start_time_ = std::chrono::steady_clock::now();
+    episode_start_system_time_ = std::chrono::system_clock::now();
     state_ = State::EPISODE_ACTIVE;
     episode_count_++;
     
@@ -490,8 +491,18 @@ void RecorderNode::handle_save_episode(
     double duration = std::chrono::duration<double>(end_time - episode_start_time_).count();
     size_t timesteps = current_episode_->get_episode_length();
 
-    std::string start_ts = get_timestamp_string();
-    std::string end_ts = get_timestamp_string();
+    // Convert system clock time points to timestamp strings
+    auto end_system_time = std::chrono::system_clock::now();
+    auto start_time_t = std::chrono::system_clock::to_time_t(episode_start_system_time_);
+    auto end_time_t = std::chrono::system_clock::to_time_t(end_system_time);
+    std::tm tm_start, tm_end;
+    localtime_r(&start_time_t, &tm_start);
+    localtime_r(&end_time_t, &tm_end);
+    std::ostringstream oss_start, oss_end;
+    oss_start << std::put_time(&tm_start, "%Y-%m-%dT%H:%M:%S");
+    oss_end << std::put_time(&tm_end, "%Y-%m-%dT%H:%M:%S");
+    std::string start_ts = oss_start.str();
+    std::string end_ts = oss_end.str();
 
     task_manager_->add_episode(*current_episode_, start_ts, end_ts);
     

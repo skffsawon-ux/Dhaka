@@ -134,6 +134,7 @@ private:
     std::unique_ptr<EpisodeData> current_episode_;
     State state_;
     std::chrono::steady_clock::time_point episode_start_time_;
+    std::chrono::system_clock::time_point episode_start_system_time_;
     std::string current_task_name_;
     int episode_count_;
 
