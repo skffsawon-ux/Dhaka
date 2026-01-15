@@ -259,7 +259,7 @@ private:
         configureServosLocked();
     }
 
-    void configureServosLocked() {
+    void configureServosLocked(bool enable_torque = true) {
         RCLCPP_INFO(this->get_logger(), "Configuring all 7 servos...");
         
         // Configure all servos (IDs 1-7) uniformly
@@ -318,10 +318,12 @@ private:
             dynamixel_->setD(config.servo_id, config.kd);
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             
-            // Enable torque
-            RCLCPP_INFO(this->get_logger(), "  Enabling torque on servo %d", config.servo_id);
-            dynamixel_->enableTorque(config.servo_id);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            // Enable torque (if requested)
+            if (enable_torque) {
+                RCLCPP_INFO(this->get_logger(), "  Enabling torque on servo %d", config.servo_id);
+                dynamixel_->enableTorque(config.servo_id);
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
         }
         
         // Move head to default position
@@ -421,8 +423,9 @@ private:
     
     void healthMonitorCallback() {
         maurice_msgs::msg::ArmStatus status_msg;
-        status_msg.ok = true;
-        status_msg.detail = "All servos nominal";
+        status_msg.is_ok = true;
+        status_msg.error = "All servos nominal";
+        status_msg.is_torque_enabled = arm_torque_enabled_.load();
         
         try {
             std::lock_guard<std::mutex> lock(dynamixel_mutex_);
@@ -432,40 +435,40 @@ private:
                 
                 uint8_t hw_status = dynamixel_->readHardwareErrorStatus(servo_id);
                 if (hw_status != 0) {
-                    status_msg.ok = false;
-                    status_msg.detail = describeHardwareError(hw_status, servo_id);
+                    status_msg.is_ok = false;
+                    status_msg.error = describeHardwareError(hw_status, servo_id);
                     break;
                 }
                 
                 int16_t present_load = dynamixel_->readPresentLoad(servo_id);
                 if (std::abs(static_cast<int>(present_load)) >= kLoadWarningThreshold) {
-                    status_msg.ok = false;
+                    status_msg.is_ok = false;
                     double load_percent = static_cast<double>(present_load) / 10.0;
-                    status_msg.detail = "Servo " + std::to_string(servo_id) + 
+                    status_msg.error = "Servo " + std::to_string(servo_id) + 
                         " high load (" + std::to_string(load_percent) + "%)";
                     break;
                 }
                 
                 uint8_t temperature = dynamixel_->readPresentTemperature(servo_id);
                 if (temperature >= kTemperatureWarningC) {
-                    status_msg.ok = false;
-                    status_msg.detail = "Servo " + std::to_string(servo_id) + 
+                    status_msg.is_ok = false;
+                    status_msg.error = "Servo " + std::to_string(servo_id) + 
                         " high temperature (" + std::to_string(static_cast<int>(temperature)) + " C)";
                     break;
                 }
             }
         } catch (const std::exception& e) {
-            status_msg.ok = false;
-            status_msg.detail = std::string("Health check error: ") + e.what();
+            status_msg.is_ok = false;
+            status_msg.error = std::string("Health check error: ") + e.what();
         }
         
         arm_status_pub_->publish(status_msg);
         
-        if (status_msg.ok != last_arm_status_.ok || status_msg.detail != last_arm_status_.detail) {
-            if (status_msg.ok) {
-                RCLCPP_INFO(this->get_logger(), "Arm health nominal: %s", status_msg.detail.c_str());
+        if (status_msg.is_ok != last_arm_status_.is_ok || status_msg.error != last_arm_status_.error) {
+            if (status_msg.is_ok) {
+                RCLCPP_INFO(this->get_logger(), "Arm health nominal: %s", status_msg.error.c_str());
             } else {
-                RCLCPP_ERROR(this->get_logger(), "Arm health issue: %s", status_msg.detail.c_str());
+                RCLCPP_ERROR(this->get_logger(), "Arm health issue: %s", status_msg.error.c_str());
             }
             last_arm_status_ = status_msg;
         }
@@ -588,6 +591,7 @@ private:
                 dynamixel_->enableTorque(id);
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
+            arm_torque_enabled_ = true;
             response->success = true;
             response->message = "Enabled torque for all arm servos";
             RCLCPP_INFO(this->get_logger(), "Successfully enabled torque for all arm servos");
@@ -610,6 +614,7 @@ private:
                 dynamixel_->disableTorque(id);
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
+            arm_torque_enabled_ = false;
             response->success = true;
             response->message = "Disabled torque for all arm servos";
             RCLCPP_INFO(this->get_logger(), "Successfully disabled torque for all arm servos");
@@ -630,11 +635,16 @@ private:
             RCLCPP_INFO(this->get_logger(), "Rebooting all servos (IDs 1-7)");
             robot_->rebootAllServos();
             
-            RCLCPP_INFO(this->get_logger(), "Reapplying configuration after reboot");
-            configureServosLocked();
+            RCLCPP_INFO(this->get_logger(), "Reapplying configuration after reboot (arm torque off)");
+            configureServosLocked(false);
             
+            // Re-enable torque only for head servo
+            RCLCPP_INFO(this->get_logger(), "Enabling torque on head servo (ID 7)");
+            dynamixel_->enableTorque(7);
+            
+            arm_torque_enabled_ = false;
             response->success = true;
-            response->message = "Rebooted and reinitialized all servos";
+            response->message = "Rebooted and reinitialized all servos (arm torque off, head torque on)";
             RCLCPP_INFO(this->get_logger(), "Successfully rebooted and reinitialized all servos");
         } catch (const std::exception& e) {
             response->success = false;
@@ -1123,6 +1133,7 @@ private:
     rclcpp::Publisher<maurice_msgs::msg::ArmStatus>::SharedPtr arm_status_pub_;
     rclcpp::TimerBase::SharedPtr health_timer_;
     maurice_msgs::msg::ArmStatus last_arm_status_;
+    std::atomic<bool> arm_torque_enabled_{true};  // Track arm torque state
 
     // Control timer (replaces manual thread)
     rclcpp::TimerBase::SharedPtr control_timer_;
