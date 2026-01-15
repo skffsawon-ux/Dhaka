@@ -217,5 +217,44 @@ void Dynamixel::reboot(int motor_id) {
     }
 }
 
+uint8_t Dynamixel::readHardwareErrorStatus(int motor_id) {
+    uint8_t status = 0;
+    uint8_t dxl_error = 0;
+    int dxl_comm_result = packet_handler_->read1ByteTxRx(
+        port_handler_, motor_id, ADDR_HARDWARE_ERROR_STATUS, &status, &dxl_error);
+
+    if (dxl_comm_result != COMM_SUCCESS) {
+        throw std::runtime_error("Failed to read hardware error status for motor " + std::to_string(motor_id));
+    }
+
+    return status;
+}
+
+int16_t Dynamixel::readPresentLoad(int motor_id) {
+    uint16_t load = 0;
+    uint8_t dxl_error = 0;
+    int dxl_comm_result = packet_handler_->read2ByteTxRx(
+        port_handler_, motor_id, ADDR_PRESENT_LOAD, &load, &dxl_error);
+
+    if (dxl_comm_result != COMM_SUCCESS) {
+        throw std::runtime_error("Failed to read load for motor " + std::to_string(motor_id));
+    }
+
+    return static_cast<int16_t>(load);
+}
+
+uint8_t Dynamixel::readPresentTemperature(int motor_id) {
+    uint8_t temperature = 0;
+    uint8_t dxl_error = 0;
+    int dxl_comm_result = packet_handler_->read1ByteTxRx(
+        port_handler_, motor_id, ADDR_PRESENT_TEMPERATURE, &temperature, &dxl_error);
+
+    if (dxl_comm_result != COMM_SUCCESS) {
+        throw std::runtime_error("Failed to read temperature for motor " + std::to_string(motor_id));
+    }
+
+    return temperature;
+}
+
 } // namespace maurice_arm
 

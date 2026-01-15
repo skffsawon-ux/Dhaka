@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
 #include "dynamixel_sdk/dynamixel_sdk.h"
 
 namespace maurice_arm {
@@ -44,6 +45,9 @@ public:
     int readVelocity(int motor_id);
     void setGoalPosition(int motor_id, int goal_position);
     void reboot(int motor_id);
+    uint8_t readHardwareErrorStatus(int motor_id);
+    int16_t readPresentLoad(int motor_id);
+    uint8_t readPresentTemperature(int motor_id);
     
     // Access to SDK objects for GroupSync operations
     dynamixel::PortHandler* portHandler() { return port_handler_; }
@@ -70,6 +74,9 @@ private:
     static constexpr int ADDR_PRESENT_POSITION = 132;
     static constexpr int ADDR_PRESENT_VELOCITY = 128;
     static constexpr int ADDR_HOMING_OFFSET = 20;
+    static constexpr int ADDR_HARDWARE_ERROR_STATUS = 70;
+    static constexpr int ADDR_PRESENT_LOAD = 126;
+    static constexpr int ADDR_PRESENT_TEMPERATURE = 146;
 };
 
 } // namespace maurice_arm

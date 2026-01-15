@@ -9,6 +9,7 @@
 #include "maurice_arm/dynamixel.hpp"
 #include "maurice_arm/robot.hpp"
 #include "maurice_msgs/srv/goto_js.hpp"
+#include "maurice_msgs/msg/arm_status.hpp"
 #include <moveit_msgs/srv/get_motion_plan.hpp>
 #include <moveit_msgs/msg/motion_plan_request.hpp>
 #include <moveit_msgs/msg/robot_state.hpp>
@@ -21,6 +22,8 @@
 #include <nlohmann/json.hpp>
 #include <thread>
 #include <future>
+#include <sstream>
+#include <cstdint>
 
 using json = nlohmann::json;
 
@@ -34,6 +37,7 @@ public:
         // Create callback groups for parallel execution
         timer_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
         service_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+        health_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
         
         // Declare parameters
         this->declare_parameter("baud_rate", 1000000);
@@ -68,6 +72,7 @@ public:
         // Setup ARM publishers/subscribers/services
         RCLCPP_INFO(this->get_logger(), "Setting up ARM publishers/subscribers/services");
         arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/mars/arm/state", 10);
+        arm_status_pub_ = this->create_publisher<maurice_msgs::msg::ArmStatus>("/mars/arm/status", 10);
         // Use best_effort QoS to match UDP receiver publisher for low-latency teleoperation
         auto cmd_qos = rclcpp::QoS(1).best_effort();
         arm_command_sub_ = this->create_subscription<std_msgs::msg::Float64MultiArray>(
@@ -156,6 +161,13 @@ public:
             std::chrono::duration_cast<std::chrono::nanoseconds>(period),
             std::bind(&MauriceArmNode::controlTimerCallback, this),
             timer_callback_group_);
+        
+        RCLCPP_INFO(this->get_logger(), "Creating health monitor timer at 0.2 Hz");
+        auto health_period = std::chrono::milliseconds(5000);
+        health_timer_ = this->create_wall_timer(
+            health_period,
+            std::bind(&MauriceArmNode::healthMonitorCallback, this),
+            health_callback_group_);
         
         RCLCPP_INFO(this->get_logger(), "Maurice Arm Node ready!");
         
@@ -405,6 +417,82 @@ private:
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Control timer error: %s", e.what());
         }
+    }
+    
+    void healthMonitorCallback() {
+        maurice_msgs::msg::ArmStatus status_msg;
+        status_msg.ok = true;
+        status_msg.detail = "All servos nominal";
+        
+        try {
+            std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+            
+            for (const auto& config : joint_configs_) {
+                const int servo_id = config.servo_id;
+                
+                uint8_t hw_status = dynamixel_->readHardwareErrorStatus(servo_id);
+                if (hw_status != 0) {
+                    status_msg.ok = false;
+                    status_msg.detail = describeHardwareError(hw_status, servo_id);
+                    break;
+                }
+                
+                int16_t present_load = dynamixel_->readPresentLoad(servo_id);
+                if (std::abs(static_cast<int>(present_load)) >= kLoadWarningThreshold) {
+                    status_msg.ok = false;
+                    double load_percent = static_cast<double>(present_load) / 10.0;
+                    status_msg.detail = "Servo " + std::to_string(servo_id) + 
+                        " high load (" + std::to_string(load_percent) + "%)";
+                    break;
+                }
+                
+                uint8_t temperature = dynamixel_->readPresentTemperature(servo_id);
+                if (temperature >= kTemperatureWarningC) {
+                    status_msg.ok = false;
+                    status_msg.detail = "Servo " + std::to_string(servo_id) + 
+                        " high temperature (" + std::to_string(static_cast<int>(temperature)) + " C)";
+                    break;
+                }
+            }
+        } catch (const std::exception& e) {
+            status_msg.ok = false;
+            status_msg.detail = std::string("Health check error: ") + e.what();
+        }
+        
+        arm_status_pub_->publish(status_msg);
+        
+        if (status_msg.ok != last_arm_status_.ok || status_msg.detail != last_arm_status_.detail) {
+            if (status_msg.ok) {
+                RCLCPP_INFO(this->get_logger(), "Arm health nominal: %s", status_msg.detail.c_str());
+            } else {
+                RCLCPP_ERROR(this->get_logger(), "Arm health issue: %s", status_msg.detail.c_str());
+            }
+            last_arm_status_ = status_msg;
+        }
+    }
+    
+    std::string describeHardwareError(uint8_t status, int servo_id) const {
+        std::vector<std::string> error_bits;
+        if (status & 0x20) { error_bits.emplace_back("overload"); }
+        if (status & 0x10) { error_bits.emplace_back("electrical fault"); }
+        if (status & 0x08) { error_bits.emplace_back("encoder fault"); }
+        if (status & 0x04) { error_bits.emplace_back("overheating"); }
+        if (status & 0x01) { error_bits.emplace_back("input voltage"); }
+        
+        std::ostringstream oss;
+        oss << "Servo " << servo_id << " hardware error";
+        if (!error_bits.empty()) {
+            oss << ": ";
+            for (size_t i = 0; i < error_bits.size(); ++i) {
+                if (i > 0) {
+                    oss << ", ";
+                }
+                oss << error_bits[i];
+            }
+        } else {
+            oss << " (code 0x" << std::hex << static_cast<int>(status) << ")";
+        }
+        return oss.str();
     }
     
     
@@ -1031,6 +1119,11 @@ private:
     std::mutex head_command_mutex_;
     std::atomic<bool> has_head_command_{false};
     
+    // Health monitoring
+    rclcpp::Publisher<maurice_msgs::msg::ArmStatus>::SharedPtr arm_status_pub_;
+    rclcpp::TimerBase::SharedPtr health_timer_;
+    maurice_msgs::msg::ArmStatus last_arm_status_;
+
     // Control timer (replaces manual thread)
     rclcpp::TimerBase::SharedPtr control_timer_;
     double control_frequency_;
@@ -1038,9 +1131,13 @@ private:
     // Callback groups for parallel execution
     rclcpp::CallbackGroup::SharedPtr timer_callback_group_;
     rclcpp::CallbackGroup::SharedPtr service_callback_group_;
+    rclcpp::CallbackGroup::SharedPtr health_callback_group_;
     
     // Mutex to protect Dynamixel serial bus access
     std::mutex dynamixel_mutex_;
+
+    static constexpr int kLoadWarningThreshold = 800;  // ~80% load (0.1% units)
+    static constexpr int kTemperatureWarningC = 70;
 };
 
 } // namespace maurice_arm

@@ -30,7 +30,7 @@ if(BUILD_TESTING)
 endif()
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  # Add your message files here
+  "msg/ArmStatus.msg"
   "srv/LightCommand.srv"
   "srv/GotoJS.srv"
   "srv/SetRobotName.srv"
