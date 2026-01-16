@@ -15,6 +15,7 @@ import os
 import time
 import glob
 import json
+import traceback
 from enum import Enum
 from typing import Tuple
 from nav2_simple_commander.robot_navigator import BasicNavigator
@@ -159,7 +160,7 @@ class ModeManager(Node):
             20  # queue size
         )
         
-        self.get_logger().info('Mode Manager started with map management capabilities.')
+        self.get_logger().info('Mode Manager starting with map management capabilities.')
         self.get_logger().info('- Call /nav/change_mode service to switch modes ("navigation" or "mapping")')
         self.get_logger().info('- Call /nav/change_navigation_map service to change map (restarts navigation if running)')
         self.get_logger().info('- Call /nav/save_map service to save current map with new name (mapping mode only, set overwrite=true to replace existing maps)')
@@ -291,6 +292,7 @@ class ModeManager(Node):
 
     def auto_start_mode(self):
         """Auto-start the mode manager in the last saved mode"""
+        self.get_logger().info('Mode Manager auto-starting')
         self.startup_timer.cancel()  # One-time execution
 
         self._cleanup_orphaned_processes()
@@ -333,7 +335,7 @@ class ModeManager(Node):
         
         # Publish current map
         current_map_msg = String()
-        current_map_msg.data = self.current_map
+        current_map_msg.data = self.current_map if self.current_map is not None else ""
         self.current_map_publisher.publish(current_map_msg)
 
     def _init_service_clients(self):
@@ -566,7 +568,7 @@ class ModeManager(Node):
         Returns: True if map loaded successfully, False otherwise
         """
 
-        if node_name is None:
+        if node_name is None or self.current_map is None:
             return False
 
         map_request = LoadMap.Request()
@@ -893,7 +895,9 @@ class ModeManager(Node):
         self.get_logger().info("Attempting to change mode")
         try:
             target_mode = request.mode.strip().lower()
-            
+            if self.current_map is None:
+                target_mode = "mapping"
+ 
             # Validate mode
             if target_mode not in ["navigation", "mapping", "mapfree"]:
                 response.success = False
@@ -979,12 +983,12 @@ class ModeManager(Node):
 
     def __del__(self):
         """Cleanup when node is destroyed"""
+        self.get_logger().info(f"Using __del__ to delete mode manager")
         try:
             for mode in NavigationMode:
                 self.shutdown_mode(mode.value)
         except Exception as e:
-            pass  # Silently ignore cleanup errors during destruction
-            # TODO: is this a good idea?
+            self.get_logger().warning(f"Error during cleanup in __del__: {e}")
 
 def main(args=None):
     rclpy.init(args=args)
@@ -998,15 +1002,15 @@ def main(args=None):
         executor.spin()
     except KeyboardInterrupt:
         pass
-    finally:
-        # Clean up any running processes
+    except Exception as e:
+        print(f"Unexpected error in main: {e}")
+        traceback.print_exc()
+        # Attempt to spin briefly to allow cleanup callbacks to process
         try:
-            for mode in NavigationMode:
-                mode_manager.shutdown_mode(mode.value)
-        except Exception as e:
-            pass  # Silently ignore cleanup errors during destruction
-            # TODO: is this a good idea?
-
+            print("Spinning executor for graceful shutdown...")
+            executor.shutdown(timeout_sec=7.0)
+        except Exception as shutdown_error:
+            print(f"Error during shutdown spin: {shutdown_error}")
         try:
             if getattr(mode_manager, '_executor', None) is not None:
                 mode_manager._executor.remove_node(mode_manager)
