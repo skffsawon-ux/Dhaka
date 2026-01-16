@@ -6,7 +6,7 @@
     min_y_velocity_threshold: 0.5         # Differential drive: no lateral motion
     min_theta_velocity_threshold: 0.001
     progress_checker_plugins: ["progress_checker"]
-    goal_checker_plugins: ["goal_checker"]
+    goal_checker_plugins: ["goal_checker", "goal_checker_precise"]
     controller_plugins: ["InnateFollowPath"]
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
@@ -15,9 +15,13 @@
     goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.1
+      yaw_goal_tolerance: 0.16 # 10 deg
       stateful: True
-
+    goal_checker_precise:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.05
+      yaw_goal_tolerance: 0.08 # 5 deg
+      stateful: True
     # MPPI controller parameters for the "FollowPath" plugin
     InnateFollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
