@@ -32,6 +32,7 @@ RecorderNode::RecorderNode()
     this->declare_parameter("velocity_topic", "/cmd_vel");
     this->declare_parameter("odom_topic", "/odom");
     this->declare_parameter("image_size", std::vector<int64_t>{640, 480});
+    this->declare_parameter("max_timesteps", 1800);
 
     // Get parameter values
     std::string data_dir_param = this->get_parameter("data_directory").as_string();
@@ -54,6 +55,7 @@ RecorderNode::RecorderNode()
     velocity_topic_ = this->get_parameter("velocity_topic").as_string();
     odom_topic_ = this->get_parameter("odom_topic").as_string();
     image_size_ = this->get_parameter("image_size").as_integer_array();
+    max_timesteps_ = this->get_parameter("max_timesteps").as_int();
 
     // Initialize TaskManager
     task_manager_ = std::make_unique<TaskManager>(data_directory_);
@@ -334,6 +336,14 @@ void RecorderNode::timer_callback() {
     try {
         current_episode_->add_timestep(action_data, qpos, qvel, images_converted, arm_timestamp, image_timestamps);
         size_t timestep_count = current_episode_->get_episode_length();
+        
+        // Check if timestep limit reached
+        if (timestep_count >= static_cast<size_t>(max_timesteps_)) {
+            RCLCPP_INFO(this->get_logger(), "Timestep limit (%d) reached. Automatically stopping episode.", max_timesteps_);
+            state_ = State::EPISODE_STOPPED;
+            publish_status("stopped", std::to_string(episode_count_), current_task_name_);
+            return;
+        }
         
         if (timestep_count % 20 == 0) {
             auto now = std::chrono::steady_clock::now();

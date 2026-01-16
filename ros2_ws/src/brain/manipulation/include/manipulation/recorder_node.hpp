@@ -128,6 +128,7 @@ private:
     std::string velocity_topic_;
     std::string odom_topic_;
     std::vector<int64_t> image_size_;
+    int max_timesteps_;
 
     // Task management
     std::unique_ptr<TaskManager> task_manager_;
