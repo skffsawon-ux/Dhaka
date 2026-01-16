@@ -106,7 +106,6 @@ install(
 # Install Python scripts
 install(
   PROGRAMS
-    manipulation/recorder.py
     manipulation/TestPublisher.py
     manipulation/recorder_interface.py
     manipulation/visualizer.py
