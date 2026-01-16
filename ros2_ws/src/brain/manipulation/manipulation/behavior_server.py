@@ -560,6 +560,12 @@ class BehaviorServer(Node):
             self.current_policy = ACTPolicy(config=policy_config, dataset_stats=dataset_stats).to(self.device)
             
             state_dict = torch.load(checkpoint_path, map_location=self.device)
+            
+            # Strip _orig_mod. prefix from keys if present (e.g., from torch.compile())
+            if any(key.startswith('_orig_mod.') for key in state_dict.keys()):
+                self.get_logger().info("Stripping '_orig_mod.' prefix from checkpoint keys")
+                state_dict = {key.replace('_orig_mod.', '', 1): value for key, value in state_dict.items()}
+            
             self.current_policy.load_state_dict(state_dict)
             self.current_policy.eval()
             
