@@ -45,7 +45,7 @@ from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 from sensor_msgs.msg import Image
 from nav_msgs.msg import Odometry, OccupancyGrid
-from geometry_msgs.msg import PoseWithCovarianceStamped
+from geometry_msgs.msg import PoseWithCovariance, PoseWithCovarianceStamped
 from brain_messages.srv import GetChatHistory
 from brain_messages.action import ExecutePrimitive
 from brain_messages.srv import GetAvailableDirectives
@@ -1171,9 +1171,39 @@ class BrainClientNode(Node):
             try:
                 # Select pose source based on navigation mode
                 use_mapfree = self.cur_nav_mode == "mapfree"
-                pose_source = None  # Either AMCL (preferred) or ODOM (mapfree)
-                if not use_mapfree and self.last_amcl_pose:
-                    pose_source = ("amcl", self.last_amcl_pose.pose)
+                pose_source = None  # Either TF (preferred), AMCL covariance (optional), or ODOM (mapfree)
+
+                if not use_mapfree:
+                    # Prefer TF for pose so we don't depend on /amcl_pose publishing.
+                    # Covariance (if available) still comes from /amcl_pose.
+                    try:
+                        transform = self.tf_buffer.lookup_transform(
+                            target_frame="map",
+                            source_frame="base_link",
+                            time=rclpy.time.Time(),
+                            timeout=rclpy.time.Duration(seconds=0.5),
+                        )
+                        pose_with_cov = PoseWithCovariance()
+                        pose_with_cov.pose.position.x = (
+                            transform.transform.translation.x
+                        )
+                        pose_with_cov.pose.position.y = (
+                            transform.transform.translation.y
+                        )
+                        pose_with_cov.pose.position.z = (
+                            transform.transform.translation.z
+                        )
+                        pose_with_cov.pose.orientation = transform.transform.rotation
+
+                        if self.last_amcl_pose is not None:
+                            pose_with_cov.covariance = self.last_amcl_pose.pose.covariance
+
+                        pose_source = ("tf", pose_with_cov)
+                    except Exception as tf_err:
+                        self.get_logger().warn(
+                            f"\033[93m[BrainClient] TF map→base_link not available; skipping image callback: {tf_err}\033[0m"
+                        )
+                        return
                 elif use_mapfree and self.last_odom is not None:
                     # Inflate covariance in mapfree mode to communicate uncertainty
                     try:
@@ -1405,7 +1435,7 @@ class BrainClientNode(Node):
                     return
 
                 # Include robot coordinates (use selected pose source)
-                self.get_logger().info(
+                self.get_logger().debug(
                     f"\033[93m[BrainClient] using pose from {pose_source}.\033[0m"
                 )
                 pose_msg = pose_source[1]  # PoseWithCovariance or Odometry.pose
@@ -1419,13 +1449,14 @@ class BrainClientNode(Node):
                     "y": pos.y,
                     "z": pos.z,
                     "theta": theta,
-                    # Frame depends on pose source; use "map" for AMCL and pose.header.frame_id if available for ODOM
+                    # Frame depends on pose source
                     "frame_id": (
-                        self.last_amcl_pose.header.frame_id
-                        if pose_source[0] == "amcl"
+                        "map"
+                        if pose_source[0] == "tf"
                         else (
-                            getattr(self.last_odom, "header", None).frame_id
-                            if hasattr(self.last_odom, "header")
+                            self.last_odom.header.frame_id
+                            if getattr(self.last_odom, "header", None) is not None
+                            and self.last_odom.header.frame_id
                             else "odom"
                         )
                     ),
