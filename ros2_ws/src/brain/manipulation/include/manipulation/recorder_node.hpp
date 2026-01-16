@@ -187,8 +187,8 @@ private:
     rclcpp::TimerBase::SharedPtr replay_timer_;
 
     // Replay publishers
-    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr replay_main_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr replay_arm_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr replay_main_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr replay_arm_pub_;
     rclcpp::Publisher<brain_messages::msg::ReplayStatus>::SharedPtr replay_status_pub_;
 
     // Replay services

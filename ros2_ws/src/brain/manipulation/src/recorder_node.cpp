@@ -168,10 +168,10 @@ RecorderNode::RecorderNode()
     timer_ = this->create_wall_timer(timer_period, std::bind(&RecorderNode::timer_callback, this));
 
     // ========== REPLAY FUNCTIONALITY ==========
-    replay_main_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
-        "/brain/recorder/replay/main_camera/compressed", 10);
-    replay_arm_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
-        "/brain/recorder/replay/arm_camera/compressed", 10);
+    replay_main_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+        "/brain/recorder/replay/main_camera/image", 10);
+    replay_arm_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+        "/brain/recorder/replay/arm_camera/image_raw", 10);
     replay_status_pub_ = this->create_publisher<brain_messages::msg::ReplayStatus>(
         "/brain/recorder/replay_status", 10);
 
@@ -1038,25 +1038,25 @@ void RecorderNode::replay_timer_callback() {
     for (const auto& [cam_name, frames] : replay_buffer_) {
         const cv::Mat& frame = frames[replay_frame_index_];
 
-        // Encode as JPEG
-        std::vector<uint8_t> encoded;
-        std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};
-        if (!cv::imencode(".jpg", frame, encoded, params)) {
-            RCLCPP_WARN(this->get_logger(), "Failed to encode frame for %s", cam_name.c_str());
+        // Convert cv::Mat to Image message using cv_bridge
+        try {
+            cv_bridge::CvImage cv_image;
+            cv_image.image = frame;
+            cv_image.encoding = "bgr8";
+            cv_image.header.stamp = this->get_clock()->now();
+            cv_image.header.frame_id = cam_name;
+
+            auto msg = cv_image.toImageMsg();
+
+            // Publish to appropriate topic
+            if (idx == 0 || cam_name.find("main") != std::string::npos || cam_name == "camera_1") {
+                replay_main_pub_->publish(*msg);
+            } else {
+                replay_arm_pub_->publish(*msg);
+            }
+        } catch (const cv_bridge::Exception& e) {
+            RCLCPP_WARN(this->get_logger(), "Failed to convert frame for %s: %s", cam_name.c_str(), e.what());
             continue;
-        }
-
-        auto msg = sensor_msgs::msg::CompressedImage();
-        msg.header.stamp = this->get_clock()->now();
-        msg.header.frame_id = cam_name;
-        msg.format = "jpeg";
-        msg.data = encoded;
-
-        // Publish to appropriate topic
-        if (idx == 0 || cam_name.find("main") != std::string::npos || cam_name == "camera_1") {
-            replay_main_pub_->publish(msg);
-        } else {
-            replay_arm_pub_->publish(msg);
         }
         idx++;
     }
