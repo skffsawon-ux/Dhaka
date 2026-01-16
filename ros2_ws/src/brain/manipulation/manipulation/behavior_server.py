@@ -30,8 +30,8 @@ from manipulation.ACT import ACTPolicy, ACTConfig
 def create_act_config(action_dim=8):
     """Create ACT configuration matching the training setup."""
     input_shapes = {
-        "observation.image_camera_1": [3, 480, 640],  # [C, H, W]
-        "observation.image_camera_2": [3, 480, 640],  # [C, H, W]
+        "observation.image_camera_1": [3, 224, 224],  # [C, H, W]
+        "observation.image_camera_2": [3, 224, 224],  # [C, H, W]
         "observation.state": [6]  # state_dim
     }
     
@@ -97,9 +97,9 @@ class BehaviorServer(Node):
             self.get_logger().warn(f"Could not load data_directory parameter: {e}")
             self.data_directory = default_data_dir
         
-        # Keep your existing image_size for the behavior server
+        # Image size for policy inference (matches checkpoint training)
         self.bridge = CvBridge()
-        self.image_size = (640, 480)  # This is for the policy inference
+        self.image_size = (224, 224)  # Resize to match checkpoint expectations
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Current execution state
