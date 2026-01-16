@@ -33,7 +33,7 @@ namespace manipulation {
 
 class RecorderNode : public rclcpp::Node {
 public:
-    explicit RecorderNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
+    RecorderNode();
     ~RecorderNode() override = default;
 
 private:

@@ -8,14 +8,13 @@
 #include <thread>
 #include <hdf5.h>
 #include <nlohmann/json.hpp>
-#include <rclcpp_components/register_node_macro.hpp>
 
 namespace fs = std::filesystem;
 
 namespace manipulation {
 
-RecorderNode::RecorderNode(const rclcpp::NodeOptions & options)
-    : Node("recorder_node", options),
+RecorderNode::RecorderNode()
+    : Node("recorder_node"),
       state_(State::IDLE),
       episode_count_(0),
       all_topics_received_(false),
@@ -1092,5 +1091,3 @@ void RecorderNode::publish_replay_status() {
 }
 
 }  // namespace manipulation
-
-RCLCPP_COMPONENTS_REGISTER_NODE(manipulation::RecorderNode)
