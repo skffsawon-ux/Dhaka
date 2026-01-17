@@ -10,11 +10,11 @@ class BasicAgent(Agent):
 
     @property
     def id(self) -> str:
-        return "basic_directive"
+        return "basic_agent"
 
     @property
     def display_name(self) -> str:
-        return "Basic Directive"
+        return "No Prompt"
 
     def get_skills(self) -> List[str]:
         """Return the list of primitives this directive can use"""
