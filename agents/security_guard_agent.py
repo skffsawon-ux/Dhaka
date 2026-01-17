@@ -10,7 +10,7 @@ class SecurityGuardAgent(Agent):
 
     @property
     def id(self) -> str:
-        return "security_guard_directive"
+        return "security_guard_agent"
 
     @property
     def display_name(self) -> str:
