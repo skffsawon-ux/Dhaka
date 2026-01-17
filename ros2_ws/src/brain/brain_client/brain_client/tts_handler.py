@@ -229,6 +229,7 @@ class TTSHandler:
     def speak_text_async(self, text: str, voice_config: Optional[Dict[str, Any]] = None) -> None:
         """
         Convert text to speech and play it asynchronously in a separate thread.
+        Retries once with 1 second gap on failure.
         
         Args:
             text: Text to speak
@@ -239,7 +240,10 @@ class TTSHandler:
             return
 
         def speak_thread():
-            self.speak_text(text, voice_config)
+            if not self.speak_text(text, voice_config):
+                self.logger.info("🔄 Retrying TTS after 1 second...")
+                time.sleep(1)
+                self.speak_text(text, voice_config)
             
         speech_thread = threading.Thread(target=speak_thread, daemon=True)
         speech_thread.start()
