@@ -149,7 +149,6 @@ else
     if nmcli con show "$ETH_CONNECTION" &>/dev/null; then
         log "  Ethernet connection '$ETH_CONNECTION' already exists, updating..."
         nmcli con modify "$ETH_CONNECTION" \
-            connection.type ethernet \
             connection.interface-name "$ETH_INTERFACE" \
             connection.autoconnect yes \
             connection.autoconnect-priority 10 \
@@ -208,7 +207,7 @@ log "Hardware configuration completed"
 
 # Exit with code 2 if reboot is required (allows caller to detect this)
 if [ "$REBOOT_REQUIRED" = true ]; then
-    exit 2
+    exit 3
 fi
 
 exit 0
