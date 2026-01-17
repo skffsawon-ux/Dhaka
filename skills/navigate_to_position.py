@@ -12,7 +12,9 @@ class Nav2Controller:
         Initialize the Nav2Controller by creating a BasicNavigator instance
         """
         # Create a BasicNavigator instance to communicate with Nav2.
-        self.navigator = BasicNavigator()
+        self.navigator = BasicNavigator(namespace='')
+        self.navigator_mapfree = BasicNavigator(namespace='mapfree')
+        self.navigator_navigation = BasicNavigator(namespace='navigation')
         self.logger = logger
         # Add a cancellation flag
         self._cancel_requested = threading.Event()
@@ -25,7 +27,7 @@ class Nav2Controller:
 
         self.logger.info("Nav2 position primitive node created")
 
-    def go_to_position(self, x: float, y: float, theta: float):
+    def go_to_position(self, x: float, y: float, theta: float, local_frame: bool):
         """
         Sends a navigation goal to the navigator and waits until navigation ends.
         The method returns the TaskResult indicating whether the goal
@@ -39,13 +41,17 @@ class Nav2Controller:
         Returns:
             TaskResult: The result status from the navigator.
         """
+        navigator = self.navigator
         # Reset cancellation flag
         self._cancel_requested.clear()
 
+        # Determine behavior tree based on navigation mode
+        behavior_tree = 'mapfree' if local_frame else 'navigation'
+
         # Create a PoseStamped goal.
         goal_pose = PoseStamped()
-        goal_pose.header.frame_id = "map"
-        goal_pose.header.stamp = self.navigator.get_clock().now().to_msg()
+        goal_pose.header.frame_id = "base_link" if local_frame else "map"
+        goal_pose.header.stamp = navigator.get_clock().now().to_msg()
         goal_pose.pose.position.x = x
         goal_pose.pose.position.y = y
         goal_pose.pose.position.z = 0.0
@@ -55,15 +61,16 @@ class Nav2Controller:
         goal_pose.pose.orientation.z = math.sin(theta / 2.0)
         goal_pose.pose.orientation.w = math.cos(theta / 2.0)
 
-        self.logger.debug("Sending goal pose ...")
-        path = self.navigator.getPath(goal_pose, goal_pose, use_start=False)
+        self.logger.debug(f"Sending goal pose ... behavior_tree: {behavior_tree}")
+        path_navigator = self.navigator_mapfree if local_frame else self.navigator_navigation
+        path = path_navigator.getPath(goal_pose, goal_pose, use_start=False)
 
         # If the path is None, we can't navigate to the goal
         if path is None:
             self.logger.error("Failed to get path to goal")
             return TaskResult.FAILED
 
-        self.navigator.goToPose(goal_pose)
+        navigator.goToPose(goal_pose, behavior_tree=behavior_tree)
 
         self.logger.debug("Waiting for navigation to complete ...")
 
@@ -72,16 +79,16 @@ class Nav2Controller:
         feedback_sent_close_to_goal = False # Flag to track if feedback has been sent
 
         # Modified loop to check for cancellation
-        while not self.navigator.isTaskComplete():
+        while not navigator.isTaskComplete():
             # Check if cancellation was requested
             if self._cancel_requested.is_set():
                 self.logger.info("Cancellation detected in navigation loop")
                 was_canceled = True
-                self.navigator.cancelTask()
+                navigator.cancelTask()
                 break
 
             # Get feedback but don't block for too long
-            feedback = self.navigator.getFeedback()
+            feedback = navigator.getFeedback()
             if feedback:
                 current_pose = feedback.current_pose.pose
                 current_position = current_pose.position
@@ -157,7 +164,7 @@ class Nav2Controller:
             # Small sleep to prevent CPU hogging
             time.sleep(0.1)  # 100ms check interval
 
-        result = self.navigator.getResult()
+        result = navigator.getResult()
 
         if was_canceled:
             self.logger.debug("Goal was canceled!")
@@ -198,15 +205,16 @@ class NavigateToPosition(Skill):
         return (
             "Use when you need to navigate the robot to the specified position "
             "using provided x, y coordinates, and theta (yaw) angle IN RADIANS. "
-            "Can be used to navigate to a specific point in the map."
+            "If local_frame is set to false, it navigates to a specific point in the map."
+            "If local_frame is set to true, it navigates locally, where the robot is currently (0,0)"
         )
 
-    def execute(self, x: float, y: float, theta: float):
+    def execute(self, x: float, y: float, theta: float, local_frame: bool = False):
         self.logger.info(
-            f"Initiating navigation to position: x={x}, y={y}, theta={theta}"
+            f"Initiating navigation to position: x={x}, y={y}, theta={theta}, local_frame={local_frame}"
         )
 
-        result = self.nav2_controller.go_to_position(x, y, theta)
+        result = self.nav2_controller.go_to_position(x, y, theta, local_frame)
 
         # Check if the navigation was canceled
         if result == TaskResult.CANCELED:
@@ -214,7 +222,7 @@ class NavigateToPosition(Skill):
             return "Navigation canceled", SkillResult.CANCELLED
         elif result == TaskResult.SUCCEEDED:
             self.logger.info(
-                f"Navigation complete. Arrived at position: x={x}, y={y}, theta={theta}"
+                f"Navigation complete. Arrived at position: x={x}, y={y}, theta={theta}, local_frame={local_frame}"
             )
             return f"Reached position ({x}, {y}, {theta})", SkillResult.SUCCESS
         else:

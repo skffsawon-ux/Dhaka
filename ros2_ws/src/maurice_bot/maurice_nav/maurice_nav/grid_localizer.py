@@ -20,17 +20,23 @@ Key features:
 - Generates candidate poses on a grid (configurable spacing and angles)
 - Scores each pose by matching laser scan endpoints to map obstacles
 - Publishes best pose to /initialpose with transient_local QoS (latched)
-- Runs as a standalone node (not lifecycle-managed) to provide coarse
-  localization before AMCL starts
+- Runs as a lifecycle node for proper initialization coordination
 
 On startup, automatically tries to localize for up to `auto_localize_timeout` seconds.
 Publishes status to /localization/status ('localized' or 'timeout').
 Service remains available for manual triggers after auto-localize completes.
 """
 
+from typing import Optional
+
 import numpy as np
 import rclpy
-from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException
+from rclpy.executors import SingleThreadedExecutor
+from rclpy.lifecycle import Node
+from rclpy.lifecycle import Publisher
+from rclpy.lifecycle import State
+from rclpy.lifecycle import TransitionCallbackReturn
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
@@ -42,18 +48,60 @@ import cupy as cp
 
 
 class GridLocalizer(Node):
-    def __init__(self):
-        super().__init__('grid_localizer')
-        
-        # Parameters
-        self.declare_parameter('sample_distance', 0.15)  # meters between samples
-        self.declare_parameter('angle_samples', 36)  # angles to try (360/36 = 10° increments)
-        self.declare_parameter('batch_size', 4000)  # poses per GPU batch (reduced for memory)
-        self.declare_parameter('max_range', 12.0)  # max lidar range
-        self.declare_parameter('scan_topic', '/scan_fast')
-        self.declare_parameter('auto_localize_timeout', 30.0)  # seconds
-        self.declare_parameter('max_score_threshold', 0.3)  # lower = stricter match
-        self.declare_parameter('auto_localize', True)  # enable auto-localize on startup
+    """GPU-accelerated grid localization lifecycle node."""
+    
+    # Subscriptions and publishers (created in on_configure)
+    scan_sub: Optional[rclpy.subscription.Subscription] = None
+    map_sub: Optional[rclpy.subscription.Subscription] = None
+    pose_pub: Optional[Publisher] = None
+    status_pub: Optional[Publisher] = None
+    srv = None
+    _auto_timer = None
+    _map_check_timer = None
+    
+    # Map state
+    map_received: bool = False
+    map_free = None
+    map_free_gpu = None
+    resolution = None
+    origin = None
+    map_h = None
+    map_w = None
+    free_pixels = None
+    map_received_time = None
+    
+    # Scan storage
+    latest_scan = None
+    
+    # Auto-localize state
+    _auto_done: bool = False
+    _auto_localize_enabled: bool = False
+    
+    # Node state tracking
+    _is_active: bool = False
+    
+    # Parameters (declared in on_configure)
+    sample_dist = None
+    angle_samples = None
+    max_range = None
+    batch_size = None
+    auto_timeout = None
+    score_threshold = None
+    
+    def __init__(self, node_name='grid_localizer', **kwargs):
+        super().__init__(node_name, **kwargs)
+    def on_configure(self, state: State) -> TransitionCallbackReturn:
+        """Unconfigured → Inactive: Declare parameters and create resources."""
+        # Parameters - only declare if first one doesn't exist
+        if not self.has_parameter('sample_distance'):
+            self.declare_parameter('sample_distance', 0.15)  # meters between samples
+            self.declare_parameter('angle_samples', 36)  # angles to try (360/36 = 10° increments)
+            self.declare_parameter('batch_size', 4000)  # poses per GPU batch (reduced for memory)
+            self.declare_parameter('max_range', 12.0)  # max lidar range
+            self.declare_parameter('scan_topic', '/scan_fast')
+            self.declare_parameter('auto_localize_timeout', 30.0)  # seconds
+            self.declare_parameter('max_score_threshold', 0.3)  # lower = stricter match
+            self.declare_parameter('auto_localize', True)  # enable auto-localize on startup
         
         self.sample_dist = self.get_parameter('sample_distance').value
         self.angle_samples = self.get_parameter('angle_samples').value
@@ -64,7 +112,7 @@ class GridLocalizer(Node):
         self.score_threshold = self.get_parameter('max_score_threshold').value
         auto_localize = self.get_parameter('auto_localize').value
         
-        # Map state
+        # Reset map state
         self.map_received = False
         self.map_free = None
         self.map_free_gpu = None
@@ -96,23 +144,102 @@ class GridLocalizer(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             depth=1,
         )
-        self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', latched_qos)
-        self.status_pub = self.create_publisher(String, '/localization/status', 10)
+        self.pose_pub = self.create_lifecycle_publisher(PoseWithCovarianceStamped, '/initialpose', latched_qos)
+        self.status_pub = self.create_lifecycle_publisher(String, '/localization/status', 10)
         
-        # Service (manual trigger, always available)
+        # Service (manual trigger)
         self.srv = self.create_service(Trigger, 'localize', self._localize_cb)
         
-        # Auto-localize timer (runs frequently to process batches)
-        self._auto_timer = None
-        if auto_localize:
+        # Store auto_localize setting for use in on_activate
+        self._auto_localize_enabled = auto_localize
+        
+        self.get_logger().info('Grid localizer configured. Waiting for map...')
+        
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_activate(self, state: State) -> TransitionCallbackReturn:
+        """Inactive → Active: Enable lifecycle publishers and start auto-localize timer."""
+        self.get_logger().info('Grid localizer activated.')
+        
+        # Mark node as active
+        self._is_active = True
+        
+        # Start map check timer if map not received yet
+        if not self.map_received and self._map_check_timer is None:
+            self._map_check_timer = self.create_timer(1.0, self._check_map_publisher)
+        
+        # Start auto-localize timer now that publishers are active
+        if self._auto_localize_enabled and self._auto_timer is None:
             self._auto_timer = self.create_timer(0.5, self._auto_localize_tick)
-        
-        # Timer to check for /map publisher availability
-        self._map_check_timer = self.create_timer(1.0, self._check_map_publisher)
-        
-        self.get_logger().info('Grid localizer ready. Waiting for map...')
-        if auto_localize:
             self.get_logger().info(f'Auto-localize enabled: {self.auto_timeout}s timeout, score threshold {self.score_threshold}')
+        
+        # This call automatically activates lifecycle publishers (pose_pub and status_pub)
+        return super().on_activate(state)
+
+    def on_deactivate(self, state: State) -> TransitionCallbackReturn:
+        """Active → Inactive: Disable lifecycle publishers and stop auto-localize timer."""
+        # Mark node as inactive
+        self._is_active = False
+        
+        # Cancel timers first
+        if self._auto_timer:
+            self._auto_timer.cancel()
+        if self._map_check_timer:
+            self._map_check_timer.cancel()
+        
+        self.get_logger().info('Grid localizer deactivated.')
+        # This call automatically deactivates lifecycle publishers (pose_pub and status_pub)
+        return super().on_deactivate(state)
+
+    def _cleanup_resources(self):
+        """Helper method to clean up all node resources."""
+        self.get_logger().info('Attempting to clean up Grid Localizer')
+        # Destroy timers
+        if self._auto_timer:
+            self.destroy_timer(self._auto_timer)
+            self._auto_timer = None
+        if self._map_check_timer:
+            self.destroy_timer(self._map_check_timer)
+            self._map_check_timer = None
+        
+        # Destroy service
+        if self.srv:
+            self.destroy_service(self.srv)
+            self.srv = None
+
+        # Destroy publishers
+        if self.pose_pub:
+            self.destroy_publisher(self.pose_pub)
+            self.pose_pub = None
+        if self.status_pub:
+            self.destroy_publisher(self.status_pub)
+            self.status_pub = None
+        
+        # Destroy subscriptions
+        if self.scan_sub:
+            self.destroy_subscription(self.scan_sub)
+            self.scan_sub = None
+        if self.map_sub:
+            self.destroy_subscription(self.map_sub)
+            self.map_sub = None
+        
+        # Clean up GPU memory
+        if self.map_free_gpu is not None:
+            del self.map_free_gpu
+            self.map_free_gpu = None
+            cp.get_default_memory_pool().free_all_blocks()
+
+    def on_cleanup(self, state: State) -> TransitionCallbackReturn:
+        """Inactive → Unconfigured: Destroy all resources and free GPU memory."""
+        self._cleanup_resources()
+        self.get_logger().info('Grid localizer cleaned up.')
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_shutdown(self, state: State) -> TransitionCallbackReturn:
+        """Any State → Finalized: Destroy all resources (can be called from any state)."""
+        self._cleanup_resources()
+        self.get_logger().info('Grid localizer shut down.')
+        return TransitionCallbackReturn.SUCCESS
 
     def _check_map_publisher(self):
         """Periodically check if /map topic has an active publisher."""
@@ -138,10 +265,36 @@ class GridLocalizer(Node):
         """Handle incoming map updates."""
         # Note: cupy imported at module level
         
-        if self.map_received:
-            return  # Only process the first map for now
+        # Check if this is a map update (second map)
+        is_map_update = self.map_received
         
-        self.get_logger().info(f'Received map: {msg.info.width}x{msg.info.height}, res={msg.info.resolution}')
+        if is_map_update:
+            self.get_logger().info(f'Received map update: {msg.info.width}x{msg.info.height}, res={msg.info.resolution}')
+            
+            # Free old resources before reassigning
+            if self.map_free_gpu is not None:
+                self.get_logger().info('Freeing old GPU map memory')
+                del self.map_free_gpu
+                self.map_free_gpu = None
+            cp.get_default_memory_pool().free_all_blocks()
+            
+            if self.map_free is not None:
+                del self.map_free
+                self.map_free = None
+            
+            if self.free_pixels is not None:
+                del self.free_pixels
+                self.free_pixels = None
+            
+            # Reset auto-localization state for new map
+            self._auto_done = False
+            # Re-enable auto-localize timer (restart the cancelled timer)
+            if self._auto_localize_enabled and self._auto_timer:
+                self._auto_timer.reset()
+                self.get_logger().info('Re-enabled auto-localize timer for new map')
+        else:
+            self.get_logger().info(f'Received map: {msg.info.width}x{msg.info.height}, res={msg.info.resolution}')
+        
         self._publish_status('processing_map')
         
         self.resolution = msg.info.resolution
@@ -326,6 +479,10 @@ class GridLocalizer(Node):
 
     def _publish_status(self, status: str):
         """Publish status for app to consume."""
+        if self.status_pub is None or not self.status_pub.is_activated:
+            self.get_logger().warn(f'Status publisher is not active. Cannot publish status: {status}')
+            return
+        
         msg = String()
         msg.data = status
         self.status_pub.publish(msg)
@@ -333,6 +490,10 @@ class GridLocalizer(Node):
 
     def _publish_pose(self, x: float, y: float, theta: float):
         """Publish pose to /initialpose (latched for AMCL)."""
+        if self.pose_pub is None or not self.pose_pub.is_activated:
+            self.get_logger().warn('Pose publisher is not active. Cannot publish pose.')
+            return
+        
         msg = PoseWithCovarianceStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'map'
@@ -348,6 +509,12 @@ class GridLocalizer(Node):
 
     def _localize_cb(self, request, response):
         """Service callback to trigger localization."""
+        # Check if node is active
+        if not self._is_active:
+            response.success = False
+            response.message = 'Node not active'
+            return response
+        
         if not self.map_received:
             response.success = False
             response.message = 'No map received yet'
@@ -486,23 +653,16 @@ class GridLocalizer(Node):
         
         return scores  # Return CuPy array, caller handles transfer
 
+
 def main(args=None):
     rclpy.init(args=args)
-    node = GridLocalizer()
+    lc_node = GridLocalizer('grid_localizer')
     try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
+        rclpy.spin(lc_node)
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
-
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
-
-
-
-
-

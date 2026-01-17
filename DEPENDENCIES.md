@@ -27,7 +27,7 @@ ros-humble-nav2-behaviors
 ros-humble-nav2-lifecycle-manager
 
 # SLAM
-ros-humble-slam-toolbox
+ros-humble-slam-toolbox-humble-lifecycle
 
 # Transforms
 ros-humble-tf2
