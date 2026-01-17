@@ -246,7 +246,7 @@ if [ -f "$HARDWARE_SCRIPT" ]; then
     HARDWARE_EXIT_CODE=${PIPESTATUS[0]}
     if [ $HARDWARE_EXIT_CODE -eq 0 ]; then
         log "  Hardware configuration completed successfully"
-    elif [ $HARDWARE_EXIT_CODE -eq 2 ]; then
+    elif [ $HARDWARE_EXIT_CODE -eq 3 ]; then
         log "  Hardware configuration completed (reboot required)"
         HARDWARE_REBOOT_REQUIRED=true
     else
