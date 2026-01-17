@@ -3,6 +3,7 @@ import asyncio
 import json
 import threading
 import time
+from typing import Optional
 
 import rclpy
 from rclpy.node import Node
@@ -23,13 +24,15 @@ from brain_client.message_types import (
 # WSClient class – largely unchanged, but now it relies on its node to publish.
 ###############################################################################
 class WSClient:
-    def __init__(self, uri, token, node):
+    def __init__(self, uri, token, node, robot_version: Optional[str] = None):
         """
         :param node: A reference to the ROS node, used for logging and publishing.
+        :param robot_version: Version string from /robot/info to send with auth.
         """
         self.uri = uri
         self.token = token
         self.node = node
+        self.robot_version = robot_version
         self.websocket = None
         self.loop = None
 
@@ -46,12 +49,15 @@ class WSClient:
                 self.node.get_logger().info(f"[WSClient] Connected to {self.uri}")
 
                 # Send auth message upon connection.
+                auth_payload = {"token": self.token}
+                if self.robot_version:
+                    auth_payload["client_version"] = self.robot_version
                 auth_msg = MessageIn(
                     type=MessageInType.AUTH,
-                    payload={"token": self.token},
+                    payload=auth_payload,
                 )
                 await self.send(auth_msg)
-                self.node.get_logger().debug("[WSClient] Auth message sent.")
+                self.node.get_logger().debug(f"[WSClient] Auth message sent with version: {self.robot_version}")
 
                 await self.listen()
         except Exception as e:
@@ -70,6 +76,17 @@ class WSClient:
             except websockets.exceptions.ConnectionClosed:
                 self.node.get_logger().warn("WebSocket connection closed by server.")
                 break
+
+            # Check for error messages (especially version_mismatch)
+            try:
+                data = json.loads(incoming)
+                if data.get("type") == "error":
+                    payload = data.get("payload", {})
+                    error_type = payload.get("error", "unknown")
+                    message = payload.get("message", "Unknown error")
+                    self.node._handle_ws_error(error_type, message)
+            except json.JSONDecodeError:
+                pass  # Not valid JSON, just forward it
 
             # Forward the raw JSON string from the WS server by publishing it.
             self.node.get_logger().debug(f"Forwarding incoming message: {incoming}")
@@ -103,6 +120,15 @@ class WSClientNode(Node):
         if not self._ws_configured:
             self.get_logger().error("❌ WebSocket URI not configured or invalid. Set 'websocket_uri' parameter (must start with ws:// or wss://).")
 
+        # Robot version from /robot/info
+        self._robot_version: Optional[str] = None
+        self._robot_info_sub = self.create_subscription(
+            String, "/robot/info", self._robot_info_callback, 10
+        )
+
+        # Publisher for TTS messages
+        self._tts_pub = self.create_publisher(String, "/brain/tts", 10)
+
         # Publisher for incoming WS messages.
         self.ws_pub = self.create_publisher(String, "ws_messages", 10)
 
@@ -115,13 +141,45 @@ class WSClientNode(Node):
 
         # Set up the WSClient (only if configured).
         if self._ws_configured:
-            self.ws_client = WSClient(self.ws_uri, self.token, self)
+            self.ws_client = WSClient(self.ws_uri, self.token, self, self._robot_version)
         else:
             self.ws_client = None
 
         # Start the websocket event loop in a separate thread.
         self.ws_thread = None
         self.get_logger().info("WSClientNode initialized.")
+
+    def _robot_info_callback(self, msg: String):
+        """Callback to extract robot version from /robot/info."""
+        try:
+            data = json.loads(msg.data)
+            version = data.get("version")
+            if version and version != self._robot_version:
+                self._robot_version = version
+                self.get_logger().info(f"Robot version: {version}")
+                # Update ws_client version if it exists
+                if self.ws_client:
+                    self.ws_client.robot_version = version
+        except Exception as e:
+            self.get_logger().debug(f"Error parsing robot info: {e}")
+
+    def _speak_error(self, message: str):
+        """Publish error message to TTS topic."""
+        try:
+            tts_msg = String()
+            tts_msg.data = message
+            self._tts_pub.publish(tts_msg)
+            self.get_logger().info(f"Speaking error: {message}")
+        except Exception as e:
+            self.get_logger().error(f"Error publishing to TTS: {e}")
+
+    def _handle_ws_error(self, error_type: str, message: str):
+        """Handle WebSocket error messages."""
+        if error_type == "version_mismatch":
+            self._speak_error(message)
+            self.get_logger().error(f"Version mismatch: {message}")
+        else:
+            self.get_logger().warn(f"WebSocket error: {error_type} - {message}")
 
     def _validate_ws_uri(self, uri: str) -> bool:
         """Check if the websocket URI is valid."""
