@@ -7,6 +7,7 @@
 #include <opencv2/opencv.hpp>
 #include <thread>
 #include <atomic>
+#include <mutex>
 
 namespace maurice_cam
 {
@@ -64,6 +65,7 @@ private:
 
   // OpenCV VideoCapture with GStreamer backend
   cv::VideoCapture cap_;
+  mutable std::mutex cap_mutex_;  // Protects cap_ access across threads
 
   // Frame processing thread
   std::thread frame_thread_;

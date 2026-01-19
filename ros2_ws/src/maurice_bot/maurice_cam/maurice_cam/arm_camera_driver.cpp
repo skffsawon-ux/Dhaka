@@ -140,9 +140,12 @@ ArmCameraDriver::~ArmCameraDriver() {
         frame_thread_.join();
     }
     
-    // Release camera
-    if (cap_.isOpened()) {
-        cap_.release();
+    // Release camera with mutex protection
+    {
+        std::lock_guard<std::mutex> lock(cap_mutex_);
+        if (cap_.isOpened()) {
+            cap_.release();
+        }
     }
     
     RCLCPP_INFO(this->get_logger(), "Arm camera driver shutdown complete");
@@ -159,27 +162,30 @@ bool ArmCameraDriver::initializeCamera() {
     std::string pipeline = createGStreamerPipeline();
     RCLCPP_INFO(this->get_logger(), "GStreamer pipeline: %s", pipeline.c_str());
 
-    // Open camera with GStreamer backend
-    cap_.open(pipeline, cv::CAP_GSTREAMER);
-    
-    if (!cap_.isOpened()) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to open camera with GStreamer pipeline");
-        return false;
-    }
+    // Open camera with GStreamer backend (mutex protected)
+    {
+        std::lock_guard<std::mutex> lock(cap_mutex_);
+        cap_.open(pipeline, cv::CAP_GSTREAMER);
+        
+        if (!cap_.isOpened()) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to open camera with GStreamer pipeline");
+            return false;
+        }
 
-    // Verify camera settings
-    int actual_width = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_WIDTH));
-    int actual_height = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_HEIGHT));
-    double actual_fps = cap_.get(cv::CAP_PROP_FPS);
-    
-    RCLCPP_INFO(this->get_logger(), "Camera opened successfully:");
-    RCLCPP_INFO(this->get_logger(), "  Actual resolution: %dx%d", actual_width, actual_height);
-    RCLCPP_INFO(this->get_logger(), "  Actual FPS: %.1f", actual_fps);
+        // Verify camera settings
+        int actual_width = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_WIDTH));
+        int actual_height = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_HEIGHT));
+        double actual_fps = cap_.get(cv::CAP_PROP_FPS);
+        
+        RCLCPP_INFO(this->get_logger(), "Camera opened successfully:");
+        RCLCPP_INFO(this->get_logger(), "  Actual resolution: %dx%d", actual_width, actual_height);
+        RCLCPP_INFO(this->get_logger(), "  Actual FPS: %.1f", actual_fps);
 
-    if (actual_width != width_ || actual_height != height_) {
-        RCLCPP_WARN(this->get_logger(), 
-            "Resolution mismatch! Requested: %dx%d, Got: %dx%d",
-            width_, height_, actual_width, actual_height);
+        if (actual_width != width_ || actual_height != height_) {
+            RCLCPP_WARN(this->get_logger(), 
+                "Resolution mismatch! Requested: %dx%d, Got: %dx%d",
+                width_, height_, actual_width, actual_height);
+        }
     }
 
     return true;
@@ -214,16 +220,30 @@ void ArmCameraDriver::frameProcessingLoop() {
     
     while (frame_thread_running_ && rclcpp::ok()) {
         try {
-            // Capture frame
-            bool success = cap_.read(frame);
+            // Capture frame with mutex protection
+            bool success = false;
+            {
+                std::lock_guard<std::mutex> lock(cap_mutex_);
+                if (cap_.isOpened()) {
+                    success = cap_.read(frame);
+                }
+            }
             
             if (!success || frame.empty()) {
                 RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
                     "Failed to capture frame, attempting recovery...");
                 
-                // Try to reopen the camera
-                cap_.release();
+                // Release camera with mutex protection
+                {
+                    std::lock_guard<std::mutex> lock(cap_mutex_);
+                    cap_.release();
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                
+                // Check if we should still be running before attempting recovery
+                if (!frame_thread_running_ || !rclcpp::ok()) {
+                    break;
+                }
                 
                 if (initializeCamera()) {
                     RCLCPP_INFO(this->get_logger(), "Camera reconnected successfully");
