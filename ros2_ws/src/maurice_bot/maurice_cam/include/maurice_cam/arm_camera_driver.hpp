@@ -5,25 +5,21 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <opencv2/opencv.hpp>
-#include <linux/videodev2.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/ioctl.h>
-#include <sys/mman.h>
-#include <string.h>
-#include <chrono>
 #include <thread>
-#include <sys/select.h>
-#include <sys/stat.h>
+#include <atomic>
+#include <mutex>
 
 namespace maurice_cam
 {
 
 /**
- * @brief V4L2-based arm camera driver node for Maurice robot
+ * @brief GStreamer-based arm camera driver node for Maurice robot
  * 
- * This node provides a direct V4L2 interface to capture frames from the arm-mounted
- * Arducam USB camera and publishes both raw and compressed images.
+ * This node uses GStreamer with YUYV format to capture frames from the 
+ * arm-mounted Arducam USB camera and publishes both raw and compressed images.
+ * 
+ * GStreamer provides robust device handling and hardware-accelerated
+ * color conversion on Jetson platforms.
  */
 class ArmCameraDriver : public rclcpp::Node
 {
@@ -41,51 +37,50 @@ public:
 
 private:
   /**
-   * @brief Initialize camera with V4L2
+   * @brief Initialize camera with GStreamer pipeline
    * @return true if successful, false otherwise
    */
-  bool init_camera();
+  bool initializeCamera();
 
   /**
-   * @brief Handle stream errors and attempt recovery
+   * @brief Create GStreamer pipeline string for YUYV capture
+   * @return GStreamer pipeline string
    */
-  void handle_stream_error();
+  std::string createGStreamerPipeline();
 
   /**
-   * @brief Capture frame and publish
+   * @brief Frame processing loop (runs in separate thread)
    */
-  void capture_and_publish();
+  void frameProcessingLoop();
+
+  /**
+   * @brief Process and publish a captured frame
+   * @param frame The captured frame
+   */
+  void processAndPublishFrame(const cv::Mat& frame);
 
   // ROS 2 publishers
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
-  rclcpp::TimerBase::SharedPtr timer_;
 
-  // Camera file descriptor
-  int fd_ = -1;
-  
+  // OpenCV VideoCapture with GStreamer backend
+  cv::VideoCapture cap_;
+  mutable std::mutex cap_mutex_;  // Protects cap_ access across threads
+
+  // Frame processing thread
+  std::thread frame_thread_;
+  std::atomic<bool> frame_thread_running_{false};
+
   // Camera parameters
   std::string device_path_;
   int width_;
   int height_;
-  int fps_;
+  double fps_;
 
   // Compressed image publishing settings
   bool publish_compressed_{false};
-  int compressed_frame_interval_{5};  // Publish compressed every N frames
+  int compressed_frame_interval_{5};
   int compressed_frame_counter_{0};
-
-  // V4L2 buffers
-  struct Buffer {
-    void* start;
-    size_t length;
-  } buffers_[4];
-
-  // Error counter for retry logic
-  int invalid_buffer_index_count_ = 0;
-  
-  static const int MAX_ERROR_COUNT = 3;  // Allow 3 consecutive errors before reconnecting
 };
 
 } // namespace maurice_cam
-

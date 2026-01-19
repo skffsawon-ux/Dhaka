@@ -30,8 +30,8 @@ from manipulation.ACT import ACTPolicy, ACTConfig
 def create_act_config(action_dim=8):
     """Create ACT configuration matching the training setup."""
     input_shapes = {
-        "observation.image_camera_1": [3, 480, 640],  # [C, H, W]
-        "observation.image_camera_2": [3, 480, 640],  # [C, H, W]
+        "observation.image_camera_1": [3, 224, 224],  # [C, H, W]
+        "observation.image_camera_2": [3, 224, 224],  # [C, H, W]
         "observation.state": [6]  # state_dim
     }
     
@@ -97,9 +97,9 @@ class BehaviorServer(Node):
             self.get_logger().warn(f"Could not load data_directory parameter: {e}")
             self.data_directory = default_data_dir
         
-        # Keep your existing image_size for the behavior server
+        # Image size for policy inference (matches checkpoint training)
         self.bridge = CvBridge()
-        self.image_size = (640, 480)  # This is for the policy inference
+        self.image_size = (224, 224)  # Resize to match checkpoint expectations
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Current execution state
@@ -262,6 +262,7 @@ class BehaviorServer(Node):
             checkpoint_path = os.path.join(primitive_dir, checkpoint_file)
             action_dim = behavior_config['execution'].get('action_dim', 8)
             duration = behavior_config['execution'].get('duration', 20.0)
+            progress_threshold = behavior_config['execution'].get('progress_threshold', 0.95)
             start_pose = behavior_config['execution'].get('start_pose')
             end_pose = behavior_config['execution'].get('end_pose')
             start_pose_time = behavior_config['execution'].get('start_pose_time', 1)
@@ -283,9 +284,6 @@ class BehaviorServer(Node):
             # Set head to AI position for optimal camera angle
             self.get_logger().info("Setting head to AI position for optimal camera angle")
             self._set_head_ai_position()
-            
-            # Progress threshold for early termination
-            progress_threshold = 0.95
             
             # Move to start pose if specified
             if start_pose:
@@ -562,6 +560,12 @@ class BehaviorServer(Node):
             self.current_policy = ACTPolicy(config=policy_config, dataset_stats=dataset_stats).to(self.device)
             
             state_dict = torch.load(checkpoint_path, map_location=self.device)
+            
+            # Strip _orig_mod. prefix from keys if present (e.g., from torch.compile())
+            if any(key.startswith('_orig_mod.') for key in state_dict.keys()):
+                self.get_logger().info("Stripping '_orig_mod.' prefix from checkpoint keys")
+                state_dict = {key.replace('_orig_mod.', '', 1): value for key, value in state_dict.items()}
+            
             self.current_policy.load_state_dict(state_dict)
             self.current_policy.eval()
             
