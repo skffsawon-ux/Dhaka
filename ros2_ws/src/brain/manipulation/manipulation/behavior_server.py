@@ -42,7 +42,7 @@ def create_act_config(action_dim=8):
     return ACTConfig(
         n_obs_steps=1,
         chunk_size=30,
-        n_action_steps=3,
+        n_action_steps=1,
         speed=1.0,
         input_shapes=input_shapes,
         output_shapes=output_shapes,
@@ -67,7 +67,7 @@ def create_act_config(action_dim=8):
         kl_weight=10.0,
         
         # Temporal ensembling
-        temporal_ensemble_coeff=None,
+        temporal_ensemble_coeff=0.01,
         
         # Optimizer settings
         optimizer_lr=1e-5,
@@ -269,7 +269,7 @@ class BehaviorServer(Node):
             checkpoint_path = os.path.join(primitive_dir, checkpoint_file)
             action_dim = behavior_config['execution'].get('action_dim', 8)
             duration = behavior_config['execution'].get('duration', 20.0)
-            progress_threshold = behavior_config['execution'].get('progress_threshold', 0.95)
+            progress_threshold = behavior_config['execution'].get('progress_threshold', 2.0)
             start_pose = behavior_config['execution'].get('start_pose')
             end_pose = behavior_config['execution'].get('end_pose')
             start_pose_time = behavior_config['execution'].get('start_pose_time', 1)
@@ -315,7 +315,7 @@ class BehaviorServer(Node):
             # Timing metrics for jitter analysis
             loop_times = []
             inference_times = []
-            last_loop_end = None
+            prev_loop_start = None
             timing_log_interval = 10  # Log stats every N iterations
             iteration_count = 0
             
@@ -327,9 +327,12 @@ class BehaviorServer(Node):
                 iteration_count += 1
                 
                 # Track loop-to-loop timing (jitter measurement)
-                if last_loop_end is not None:
-                    loop_interval = loop_start - last_loop_end
+                # Measure from start of previous iteration to start of current iteration
+                # This captures the full loop period including inference and sleep time
+                if prev_loop_start is not None:
+                    loop_interval = loop_start - prev_loop_start
                     loop_times.append(loop_interval)
+                prev_loop_start = loop_start
                 
                 # Check for cancellation
                 if self._cancel_requested.is_set():
@@ -395,8 +398,6 @@ class BehaviorServer(Node):
                 sleep_time = period - (time.time() - loop_start)
                 if sleep_time > 0:
                     time.sleep(sleep_time)
-                
-                last_loop_end = time.time()
             
             # Log final timing summary
             if len(loop_times) > 0:
