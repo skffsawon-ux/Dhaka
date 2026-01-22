@@ -109,10 +109,10 @@ def generate_launch_description():
         remappings=[('cmd_vel', 'cmd_vel_raw')]
     )
 
-    description_subscriber_node = Node(
+    dynamic_footprint_node = Node(
         package='maurice_nav',
-        executable='description_subscriber',
-        name='description_subscriber',
+        executable='dynamic_footprint',
+        name='dynamic_footprint',
         output='screen',
     )
     
@@ -146,7 +146,7 @@ def generate_launch_description():
         navigation_launch,
         # mapfree_launch,
         mapping_launch,
-        description_subscriber_node,
+        dynamic_footprint_node,
         velocity_smoother_node,
         bt_navigator_node,
         mapfree_planner_node,

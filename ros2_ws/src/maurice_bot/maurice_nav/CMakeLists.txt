@@ -26,9 +26,9 @@ ament_target_dependencies(null_map_node
 )
 install(TARGETS null_map_node DESTINATION lib/${PROJECT_NAME})
 
-# Build C++ executable for description_subscriber node
-add_executable(description_subscriber src/description_subscriber.cpp)
-ament_target_dependencies(description_subscriber
+# Build C++ executable for dynamic_footprint node
+add_executable(dynamic_footprint src/dynamic_footprint.cpp)
+ament_target_dependencies(dynamic_footprint
   rclcpp
   geometry_msgs
   tf2_msgs
@@ -37,7 +37,7 @@ ament_target_dependencies(description_subscriber
   visualization_msgs
   urdf
 )
-install(TARGETS description_subscriber DESTINATION lib/${PROJECT_NAME})
+install(TARGETS dynamic_footprint DESTINATION lib/${PROJECT_NAME})
 
 # Build Switch BT control node plugin
 add_library(maurice_nav_bt_nodes SHARED

@@ -23,22 +23,22 @@
 using namespace std::chrono_literals;
 
 /**
- * DescriptionSubscriber Node
+ * DynamicFootprint Node
  * 
  * Subscribes to:
  * - /robot_description (via ROS parameter)
  * - /tf (dynamic transforms)
  * - /tf_static (static transforms)
  */
-class DescriptionSubscriber : public rclcpp::Node
+class DynamicFootprint : public rclcpp::Node
 {
 public:
-  explicit DescriptionSubscriber(const rclcpp::NodeOptions & options = rclcpp::NodeOptions())
-  : rclcpp::Node("description_subscriber", options),
+  explicit DynamicFootprint(const rclcpp::NodeOptions & options = rclcpp::NodeOptions())
+  : rclcpp::Node("dynamic_footprint", options),
     tf_buffer_(this->get_clock()),
     tf_listener_(tf_buffer_)
   {
-    RCLCPP_INFO(this->get_logger(), "DescriptionSubscriber node initialized");
+    RCLCPP_INFO(this->get_logger(), "DynamicFootprint node initialized");
 
     this->declare_parameter<double>("padding", 0.03);
     this->declare_parameter<double>("update_frequency", 5.0);
@@ -64,7 +64,7 @@ public:
     const auto period = std::chrono::duration<double>(1.0 / update_freq);
     timer_ = this->create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(period),
-      std::bind(&DescriptionSubscriber::timer_callback, this));
+      std::bind(&DynamicFootprint::timer_callback, this));
 
     // Get robot_description from parameter server
     get_robot_description();
@@ -548,7 +548,7 @@ private:
 int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<DescriptionSubscriber>());
+  rclcpp::spin(std::make_shared<DynamicFootprint>());
   rclcpp::shutdown();
   return 0;
 }
