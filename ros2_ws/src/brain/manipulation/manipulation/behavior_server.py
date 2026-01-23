@@ -42,7 +42,7 @@ def create_act_config(action_dim=8):
     return ACTConfig(
         n_obs_steps=1,
         chunk_size=30,
-        n_action_steps=10,
+        n_action_steps=5,
         speed=1.0,
         input_shapes=input_shapes,
         output_shapes=output_shapes,
@@ -615,8 +615,8 @@ class BehaviorServer(Node):
                 
                 # Extract cmd_vel commands (elements 6-7 = linear.x, angular.z)
                 twist_msg = Twist()
-                twist_msg.linear.x = float(action[6])
-                twist_msg.angular.z = float(action[7])
+                twist_msg.linear.x = float(action[6]) / 2.0
+                twist_msg.angular.z = float(action[7]) / 2.0
                 self.cmd_vel_pub.publish(twist_msg)
                 
                 # Send feedback
@@ -873,8 +873,8 @@ class BehaviorServer(Node):
             publish_start = time.time()
             # Publish commands (using first 8 dimensions)
             twist_msg = Twist()
-            twist_msg.linear.x = float(action_np[6])  # 7th element
-            twist_msg.angular.z = float(action_np[7])  # 8th element
+            twist_msg.linear.x = float(action_np[6]) / 2.0  # 7th element
+            twist_msg.angular.z = float(action_np[7]) / 2.0  # 8th element
             self.cmd_vel_pub.publish(twist_msg)
 
             arm_msg = Float64MultiArray()
