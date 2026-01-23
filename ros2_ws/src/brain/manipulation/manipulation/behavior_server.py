@@ -42,7 +42,7 @@ def create_act_config(action_dim=8):
     return ACTConfig(
         n_obs_steps=1,
         chunk_size=30,
-        n_action_steps=1,
+        n_action_steps=10,
         speed=1.0,
         input_shapes=input_shapes,
         output_shapes=output_shapes,
@@ -67,7 +67,7 @@ def create_act_config(action_dim=8):
         kl_weight=10.0,
         
         # Temporal ensembling
-        temporal_ensemble_coeff=0.01,
+        temporal_ensemble_coeff=None,
         
         # Optimizer settings
         optimizer_lr=1e-5,
@@ -101,6 +101,7 @@ class BehaviorServer(Node):
         self.bridge = CvBridge()
         self.image_size = (224, 224)  # Resize to match checkpoint expectations
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
         
         # Log device info
         self.get_logger().info(f"PyTorch device: {self.device}")
@@ -315,6 +316,12 @@ class BehaviorServer(Node):
             # Timing metrics for jitter analysis
             loop_times = []
             inference_times = []
+            # Detailed timing breakdowns
+            preprocess_times = []
+            tensor_creation_times = []
+            model_inference_times = []
+            cpu_transfer_times = []
+            publish_times = []
             prev_loop_start = None
             timing_log_interval = 10  # Log stats every N iterations
             iteration_count = 0
@@ -349,9 +356,18 @@ class BehaviorServer(Node):
                 
                 # Run inference and get progress value
                 inference_start = time.time()
-                progress = self._run_inference_once()
+                detailed_timing = {}
+                progress = self._run_inference_once(detailed_timing=detailed_timing)
                 inference_end = time.time()
                 inference_times.append(inference_end - inference_start)
+                
+                # Store detailed timing breakdowns
+                if detailed_timing:
+                    preprocess_times.append(detailed_timing.get('preprocess', 0))
+                    tensor_creation_times.append(detailed_timing.get('tensor_creation', 0))
+                    model_inference_times.append(detailed_timing.get('model_inference', 0))
+                    cpu_transfer_times.append(detailed_timing.get('cpu_transfer', 0))
+                    publish_times.append(detailed_timing.get('publish', 0))
                 
                 # Check if inference failed due to missing sensor data
                 if progress is None:
@@ -385,6 +401,26 @@ class BehaviorServer(Node):
                         f"inference: avg={avg_inference:.1f}ms, max={max_inference:.1f}ms | "
                         f"actual_hz={actual_hz:.1f} (target={inference_hz})"
                     )
+                    
+                    # Log detailed inference timing breakdown
+                    if (len(preprocess_times) >= timing_log_interval and 
+                        len(tensor_creation_times) >= timing_log_interval and
+                        len(model_inference_times) >= timing_log_interval):
+                        avg_preprocess = np.mean(preprocess_times[-timing_log_interval:]) * 1000
+                        avg_tensor = np.mean(tensor_creation_times[-timing_log_interval:]) * 1000
+                        avg_model = np.mean(model_inference_times[-timing_log_interval:]) * 1000
+                        avg_cpu = np.mean(cpu_transfer_times[-timing_log_interval:]) * 1000
+                        avg_publish = np.mean(publish_times[-timing_log_interval:]) * 1000
+                        
+                        self.get_logger().info(
+                            f"[DETAILED TIMING] iter={iteration_count} | "
+                            f"preprocess: {avg_preprocess:.1f}ms | "
+                            f"tensor_creation: {avg_tensor:.1f}ms | "
+                            f"model_inference: {avg_model:.1f}ms | "
+                            f"cpu_transfer: {avg_cpu:.1f}ms | "
+                            f"publish: {avg_publish:.1f}ms | "
+                            f"total: {avg_inference:.1f}ms"
+                        )
                 
                 # Send feedback
                 remaining_time = max(0.0, duration - elapsed_time)
@@ -419,6 +455,24 @@ class BehaviorServer(Node):
                     f"inference: avg={overall_avg_inference:.1f}ms, max={overall_max_inference:.1f}ms | "
                     f"actual_hz={overall_actual_hz:.1f} (target={inference_hz})"
                 )
+                
+                # Log final detailed timing breakdown
+                if len(preprocess_times) > 0:
+                    overall_avg_preprocess = np.mean(preprocess_times) * 1000
+                    overall_avg_tensor = np.mean(tensor_creation_times) * 1000
+                    overall_avg_model = np.mean(model_inference_times) * 1000
+                    overall_avg_cpu = np.mean(cpu_transfer_times) * 1000
+                    overall_avg_publish = np.mean(publish_times) * 1000
+                    
+                    self.get_logger().info(
+                        f"[DETAILED TIMING SUMMARY] total_iterations={iteration_count} | "
+                        f"preprocess: avg={overall_avg_preprocess:.1f}ms | "
+                        f"tensor_creation: avg={overall_avg_tensor:.1f}ms | "
+                        f"model_inference: avg={overall_avg_model:.1f}ms | "
+                        f"cpu_transfer: avg={overall_avg_cpu:.1f}ms | "
+                        f"publish: avg={overall_avg_publish:.1f}ms | "
+                        f"total_inference: avg={overall_avg_inference:.1f}ms"
+                    )
             
             # Stop robot and move to end pose
             self._stop_robot()
@@ -687,6 +741,11 @@ class BehaviorServer(Node):
                 self.current_policy = torch.compile(self.current_policy, mode='default')
                 self.get_logger().info("Model compilation setup completed")
                 self.get_logger().info("Note: First inference will trigger actual compilation")
+                # Verify compilation was applied
+                if hasattr(self.current_policy, '_orig_mod'):
+                    self.get_logger().info("✓ Compilation verified: model has _orig_mod attribute")
+                else:
+                    self.get_logger().warn("⚠ Compilation may not have been applied (no _orig_mod attribute)")
             except Exception as e:
                 self.get_logger().warn(f"Model compilation failed: {e}, falling back to uncompiled model")
             
@@ -700,20 +759,23 @@ class BehaviorServer(Node):
             param_count = sum(p.numel() for p in self.current_policy.parameters())
             self.get_logger().info(f"Policy parameters: {param_count:,} ({param_count/1e6:.1f}M)")
             
-            # Warm-up inference
-            self.get_logger().info("Running warm-up inference...")
+            # Warm-up inference (run multiple times to trigger compilation)
+            self.get_logger().info("Running warm-up inference (triggering compilation)...")
             warmup_start = time.time()
             dummy_batch = {
                 "observation.image_camera_1": torch.zeros(1, 3, 224, 224, device=self.device),
                 "observation.image_camera_2": torch.zeros(1, 3, 224, 224, device=self.device),
                 "observation.state": torch.zeros(1, 6, device=self.device)
             }
-            with torch.no_grad():
-                # Use autocast for warm-up to trigger compilation
-                with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+            # Run multiple warmup iterations to ensure compilation completes
+            num_warmup = 5
+            for i in range(num_warmup):
+                with torch.no_grad():
                     _ = self.current_policy.select_action(dummy_batch)
+                if self.device.type == 'cuda':
+                    torch.cuda.synchronize()
             warmup_time = time.time() - warmup_start
-            self.get_logger().info(f"Warm-up inference completed in {warmup_time:.2f}s")
+            self.get_logger().info(f"Warm-up inference completed ({num_warmup} iterations) in {warmup_time:.2f}s (avg: {warmup_time/num_warmup*1000:.1f}ms per inference)")
             
             return True
             
@@ -740,13 +802,18 @@ class BehaviorServer(Node):
         self.latest_joint_state = msg
         self.latest_joint_timestamp = rclpy.time.Time.from_msg(msg.header.stamp)
 
-    def _run_inference_once(self):
-        """Run one inference step with current policy."""
+    def _run_inference_once(self, detailed_timing=None):
+        """Run one inference step with current policy.
+        
+        Args:
+            detailed_timing: Optional dict to store detailed timing breakdowns
+        """
         if not self.current_policy or self.latest_image1 is None or self.latest_image2 is None or self.latest_joint_state is None:
             return None
 
         try:
-            # Image preprocessing
+            # Image preprocessing timing
+            preprocess_start = time.time()
             # Keep images in BGR format to match training pipeline (recorder → H5 → WebDataset → model all use BGR)
             # Use INTER_AREA to match training preprocessing (webdataset.py uses INTER_AREA)
             img1 = cv2.resize(self.latest_image1, self.image_size, interpolation=cv2.INTER_AREA)
@@ -755,12 +822,20 @@ class BehaviorServer(Node):
             img2 = img2.astype(np.float32) / 255.0
             img1 = np.transpose(img1, (2, 0, 1))
             img2 = np.transpose(img2, (2, 0, 1))
+            preprocess_time = time.time() - preprocess_start
+            
+            # Tensor creation and CPU->GPU transfer timing
+            tensor_start = time.time()
             img1_tensor = torch.tensor(img1, device=self.device).unsqueeze(0)
             img2_tensor = torch.tensor(img2, device=self.device).unsqueeze(0)
 
             # Joint state preprocessing
             qpos = np.asarray(self.latest_joint_state.position, dtype=np.float32)
             qpos_tensor = torch.tensor(qpos, device=self.device).unsqueeze(0)
+            
+            if self.device.type == 'cuda':
+                torch.cuda.synchronize()  # Wait for GPU transfers to complete
+            tensor_creation_time = time.time() - tensor_start
 
             batch = {
                 "observation.image_camera_1": img1_tensor,
@@ -768,36 +843,56 @@ class BehaviorServer(Node):
                 "observation.state": qpos_tensor
             }
 
-            # Policy forward pass
+            # Policy forward pass timing
+            inference_start = time.time()
+            if self.device.type == 'cuda':
+                torch.cuda.synchronize()  # Ensure previous operations are done
             with torch.no_grad():
-                # Use BF16 autocast for faster inference (matching training setup)
-                with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-                    action = self.current_policy.select_action(batch)
-                action_np = action.cpu().numpy().squeeze(0)
+                action = self.current_policy.select_action(batch)
+                if self.device.type == 'cuda':
+                    torch.cuda.synchronize()  # Wait for inference to complete
+            inference_time = time.time() - inference_start
+            
+            # GPU->CPU transfer timing
+            cpu_transfer_start = time.time()
+            action_np = action.cpu().numpy().squeeze(0)
+            cpu_transfer_time = time.time() - cpu_transfer_start
 
-                # Check action dimensions match expected
-                if action_np.shape[0] < self.current_action_dim:
-                    self.get_logger().error(f"Action has wrong dimensions. Expected {self.current_action_dim}, got {action_np.shape[0]}")
-                    return None
+            # Check action dimensions match expected
+            if action_np.shape[0] < self.current_action_dim:
+                self.get_logger().error(f"Action has wrong dimensions. Expected {self.current_action_dim}, got {action_np.shape[0]}")
+                return None
 
-                progress = None
-                
-                # Extract progress value for 10-dimensional actions
-                if self.current_action_dim >= 10:
-                    progress = float(action_np[8])  # 9th element (index 8) - progress
+            progress = None
+            
+            # Extract progress value for 10-dimensional actions
+            if self.current_action_dim >= 10:
+                progress = float(action_np[8])  # 9th element (index 8) - progress
 
-                # Publish commands (using first 8 dimensions)
-                twist_msg = Twist()
-                twist_msg.linear.x = float(action_np[6])  # 7th element
-                twist_msg.angular.z = float(action_np[7])  # 8th element
-                self.cmd_vel_pub.publish(twist_msg)
+            # Publish commands timing
+            publish_start = time.time()
+            # Publish commands (using first 8 dimensions)
+            twist_msg = Twist()
+            twist_msg.linear.x = float(action_np[6])  # 7th element
+            twist_msg.angular.z = float(action_np[7])  # 8th element
+            self.cmd_vel_pub.publish(twist_msg)
 
-                arm_msg = Float64MultiArray()
-                arm_msg.data = [float(v) for v in action_np[:6]]  # First 6 elements
-                self.arm_state_pub.publish(arm_msg)
-                
-                # Return progress value for early termination check
-                return progress
+            arm_msg = Float64MultiArray()
+            arm_msg.data = [float(v) for v in action_np[:6]]  # First 6 elements
+            self.arm_state_pub.publish(arm_msg)
+            publish_time = time.time() - publish_start
+            
+            # Store detailed timing if requested
+            if detailed_timing is not None:
+                detailed_timing['preprocess'] = preprocess_time
+                detailed_timing['tensor_creation'] = tensor_creation_time
+                detailed_timing['model_inference'] = inference_time
+                detailed_timing['cpu_transfer'] = cpu_transfer_time
+                detailed_timing['publish'] = publish_time
+                detailed_timing['total'] = preprocess_time + tensor_creation_time + inference_time + cpu_transfer_time + publish_time
+            
+            # Return progress value for early termination check
+            return progress
 
         except Exception as e:
             self.get_logger().error(f"Error during inference: {e}")
