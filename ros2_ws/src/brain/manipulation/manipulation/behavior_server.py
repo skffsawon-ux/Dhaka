@@ -305,7 +305,6 @@ class BehaviorServer(Node):
                 if not self.call_arm_goto_service(start_pose, start_pose_time):
                     self.get_logger().error("Failed to move to start pose")
                     return "FAILURE", "Failed to move arm to start pose"
-                time.sleep(start_pose_time)
             
             # Execute policy inference
             start_time = time.time()
@@ -581,8 +580,6 @@ class BehaviorServer(Node):
                     self.get_logger().error("Failed to move to initial arm position")
                     return "FAILURE", "Failed to move to initial arm position"
             
-            # Wait for arm movement to complete
-            time.sleep(start_pose_time)
             
             # Replay parameters
             total_steps = actions.shape[0]
@@ -958,7 +955,7 @@ class BehaviorServer(Node):
         return True
 
     def call_arm_goto_service(self, position, time_duration=5):
-        """Call the arm goto service with specified position."""
+        """Call the arm goto service with specified position and wait for completion."""
         if not self.arm_goto_client.wait_for_service(timeout_sec=2.0):
             self.get_logger().error("Arm goto service not available")
             return False
@@ -975,7 +972,24 @@ class BehaviorServer(Node):
         try:
             future = self.arm_goto_client.call_async(request)
             self.get_logger().info(f"Arm goto service called with position: {[float(p) for p in position]} (time: {time_duration}s)")
-            return True
+            
+            # Wait for the service call to complete (service blocks for time_duration internally)
+            timeout_sec = time_duration + 0.2  # Small buffer for network/processing overhead
+            start_wait = time.time()
+            while not future.done():
+                if time.time() - start_wait > timeout_sec:
+                    self.get_logger().error(f"Arm goto service timed out after {timeout_sec}s")
+                    return False
+                time.sleep(0.05)  # Small sleep to avoid busy-waiting
+            
+            # Check result
+            result = future.result()
+            if result is not None:
+                self.get_logger().info(f"Arm goto service completed successfully")
+                return True
+            else:
+                self.get_logger().error("Arm goto service returned None result")
+                return False
                 
         except Exception as e:
             self.get_logger().error(f"Error calling arm goto service: {e}, position type: {type(position)}, position: {position}")
