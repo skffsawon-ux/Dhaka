@@ -2,6 +2,12 @@
 # Install with: pip3 install -r pip-requirements.txt
 # See DEPENDENCIES.md for full analysis of where each package is used
 
+# Use NVIDIA Jetson AI Lab PyPI for optimized PyTorch wheels
+# Available indexes: jp6/cu126, jp6/cu128, jp6/cu129
+# See: https://pypi.jetson-ai-lab.io/
+# NOTE: torch is installed separately in post_update.sh with --index-url to ensure CUDA wheels
+--extra-index-url https://pypi.jetson-ai-lab.io/jp6/cu126
+
 # Core
 numpy<2
 opencv-python
@@ -13,8 +19,8 @@ websockets
 # Data/ML
 h5py
 einops
-torch
-torchvision
+# torch/torchvision/torchaudio are installed separately in post_update.sh
+# to ensure CUDA wheels from Jetson AI Lab (pip prefers CPU manylinux wheels otherwise)
 
 # ROS/Robot utilities
 urdf-parser-py

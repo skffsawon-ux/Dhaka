@@ -354,8 +354,29 @@ else
         else
             log "  Mediapipe not installed, skipping uninstall"
         fi
-        log "  Installing pip dependencies..."
-        sudo -u "$ACTUAL_USER" pip3 install -r "$PIP_DEPS_FILE" --upgrade
+        
+        # Install Jetson-optimized PyTorch separately with ONLY the Jetson index
+        # pip prefers manylinux wheels over platform-specific wheels, so we CANNOT
+        # have PyPI as a fallback when installing torch or it will grab the CPU wheel
+        JETSON_INDEX="https://pypi.jetson-ai-lab.io/jp6/cu126"
+        TORCH_VERSION="2.8.0"
+        TORCHVISION_VERSION="0.23.0"
+        
+        CUDA_AVAILABLE=$(sudo -u "$ACTUAL_USER" python3 -c "import torch; print(torch.cuda.is_available())" 2>/dev/null || echo "False")
+        if [[ "$CUDA_AVAILABLE" != "True" ]]; then
+            log "  PyTorch CUDA not available, reinstalling from Jetson AI Lab..."
+            sudo -u "$ACTUAL_USER" pip3 uninstall -y torch torchvision torchaudio 2>/dev/null || true
+            sudo -u "$ACTUAL_USER" pip3 install --no-cache-dir \
+                "torch==$TORCH_VERSION" \
+                "torchvision==$TORCHVISION_VERSION" \
+                torchaudio \
+                --index-url "$JETSON_INDEX"
+            log "  PyTorch installed from Jetson AI Lab"
+        fi
+        
+        # Install remaining pip dependencies (torch already installed above)
+        log "  Installing other pip dependencies..."
+        sudo -u "$ACTUAL_USER" pip3 install -r "$PIP_DEPS_FILE" --upgrade-strategy only-if-needed
         log "  Pip dependencies installed"
     fi
 fi
