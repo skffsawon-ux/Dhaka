@@ -85,8 +85,9 @@ class TrainingJobTrackerNode(Node):
         
         # Create proxy client (credentials from env vars)
         # Similar to how InputManagerNode initializes ProxyClient
+        # Pass the ROS logger so adapters can use it for logging
         try:
-            self.proxy = ProxyClient()
+            self.proxy = ProxyClient(logger=self.get_logger())
             if self.proxy.is_available():
                 self.logger.info(f"✅ Proxy client initialized (URL: {self.proxy.proxy_url[:30]}...)")
                 # Verify auth key is set

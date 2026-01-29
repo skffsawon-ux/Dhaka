@@ -40,6 +40,7 @@ class ProxyClient:
         proxy_url: Optional[str] = None,
         innate_service_key: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
+        logger=None,
     ):
         """
         Initialize unified proxy client.
@@ -48,10 +49,12 @@ class ProxyClient:
             proxy_url: Proxy service URL (defaults to INNATE_PROXY_URL env var)
             innate_service_key: Authentication token (defaults to INNATE_SERVICE_KEY env var)
             config: Service configuration dict (models, voice IDs, etc.)
+            logger: Optional ROS logger to pass to service adapters for logging
         """
         self._proxy_url = (proxy_url or os.getenv("INNATE_PROXY_URL", "")).rstrip("/")
         self._innate_service_key = innate_service_key or os.getenv("INNATE_SERVICE_KEY", "")
         self._config = config or {}
+        self._logger = logger
         
         # Lazy-initialized service adapters
         self._cartesia = None
@@ -123,7 +126,7 @@ class ProxyClient:
         """
         if self._training is None:
             from brain_client.client.adapters.training_adapter import TrainingClient
-            self._training = TrainingClient(self)
+            self._training = TrainingClient(self, logger=self._logger)
         return self._training
     
     def _get_headers(self) -> Dict[str, str]:

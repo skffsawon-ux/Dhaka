@@ -10,7 +10,8 @@ from pathlib import Path
 import traceback
 import time
 
-logger = logging.getLogger(__name__)
+# Fallback logger for when no ROS logger is provided
+_fallback_logger = logging.getLogger(__name__)
 
 
 class TrainingClient:
@@ -23,17 +24,30 @@ class TrainingClient:
     Follows the same pattern as CartesiaAdapter - takes parent ProxyClient.
     """
     
-    def __init__(self, parent):
+    def __init__(self, parent, logger=None):
         """
         Initialize training client.
         
         Args:
             parent: Parent ProxyClient instance (provides proxy_url and auth)
+            logger: Optional ROS logger to use. If provided, creates a child logger
+                    with '.training' suffix. Falls back to Python logging if not provided.
         """
         self._parent = parent
         self.proxy_url = parent.proxy_url
         self._innate_service_key = parent.innate_service_key
         self._async_client: Optional[httpx.AsyncClient] = None
+        
+        # Set up logger - use ROS logger with child name if provided, else fallback
+        if logger is not None:
+            # ROS loggers have get_child() method to create named sub-loggers
+            if hasattr(logger, 'get_child'):
+                self.logger = logger.get_child('training')
+            else:
+                # If it's a wrapped logger (like UniversalLogger), use it directly
+                self.logger = logger
+        else:
+            self.logger = _fallback_logger
         
         # Validate that proxy_url and auth are set
         if not self.proxy_url:
@@ -76,7 +90,7 @@ class TrainingClient:
         """Get authentication headers."""
         token = self._get_token()
         headers = {"X-Innate-Token": token}
-        logger.debug(f"Built headers with token length: {len(token)}, preview: {token[:20]}...")
+        self.logger.debug(f"Built headers with token length: {len(token)}, preview: {token[:20]}...")
         return headers
     
     def _get_async_client(self, timeout: float = 60.0) -> httpx.AsyncClient:
@@ -131,28 +145,28 @@ class TrainingClient:
         headers = self._get_headers()
         
         call_stack = ''.join(traceback.format_stack()[-4:-1])  # Get caller info
-        logger.info(f"🔐 Requesting upload permission (auth handshake)")
-        logger.info(f"  URL: {url}")
-        logger.info(f"  Filename: {filename}")
-        logger.info(f"  Content-Type: {content_type}")
-        logger.info(f"  Caller stack: {call_stack}")
-        logger.info(f"  Training params: {training_params}")
-        logger.debug(f"  Headers: X-Innate-Token present={bool(headers.get('X-Innate-Token'))}")
+        self.logger.info(f"🔐 Requesting upload permission (auth handshake)")
+        self.logger.info(f"  URL: {url}")
+        self.logger.info(f"  Filename: {filename}")
+        self.logger.info(f"  Content-Type: {content_type}")
+        self.logger.info(f"  Caller stack: {call_stack}")
+        self.logger.info(f"  Training params: {training_params}")
+        self.logger.debug(f"  Headers: X-Innate-Token present={bool(headers.get('X-Innate-Token'))}")
         
         try:
-            logger.info(f"  Sending POST request to proxy...")
+            self.logger.info(f"  Sending POST request to proxy...")
             response = await client.post(url, json=payload, headers=headers)
-            logger.info(f"  ✓ Received response: {response.status_code}")
+            self.logger.info(f"  ✓ Received response: {response.status_code}")
             response.raise_for_status()
             
             result = response.json()
             job_id = result.get("job_id")
             upload_url = result.get("upload_url")
             
-            logger.info(f"✅ Upload permission granted!")
-            logger.info(f"  Job ID: {job_id}")
-            logger.info(f"  Presigned URL received: {upload_url[:80]}...")
-            logger.info(f"  Content-Type: {result.get('content_type', 'N/A')}")
+            self.logger.info(f"✅ Upload permission granted!")
+            self.logger.info(f"  Job ID: {job_id}")
+            self.logger.info(f"  Presigned URL received: {upload_url[:80]}...")
+            self.logger.info(f"  Content-Type: {result.get('content_type', 'N/A')}")
             
             return result
         except httpx.HTTPStatusError as e:
@@ -162,9 +176,9 @@ class TrainingClient:
                 error_detail = f" Response: {e.response.text}"
             except Exception:
                 pass
-            logger.error(f"Upload permission request failed: {e.response.status_code}{error_detail}")
-            logger.error(f"Request URL: {url}")
-            logger.error(f"Request payload: {payload}")
+            self.logger.error(f"Upload permission request failed: {e.response.status_code}{error_detail}")
+            self.logger.error(f"Request URL: {url}")
+            self.logger.error(f"Request payload: {payload}")
             raise
     
     async def initiate_resumable_upload(
@@ -183,12 +197,12 @@ class TrainingClient:
         Returns:
             Session URI from Location header (use this for chunked uploads)
         """
-        logger.info(f"📤 Initiating resumable upload session")
-        logger.info(f"  POST to presigned URL: {upload_url[:80]}...")
-        logger.info(f"  Headers: x-goog-resumable=start, Content-Type={content_type}")
+        self.logger.info(f"📤 Initiating resumable upload session")
+        self.logger.info(f"  POST to presigned URL: {upload_url[:80]}...")
+        self.logger.info(f"  Headers: x-goog-resumable=start, Content-Type={content_type}")
         
         async with httpx.AsyncClient(timeout=30.0) as client:
-            logger.debug(f"  Sending POST request with empty body...")
+            self.logger.debug(f"  Sending POST request with empty body...")
             response = await client.post(
                 upload_url,
                 headers={
@@ -197,7 +211,7 @@ class TrainingClient:
                 },
                 content=b""
             )
-            logger.info(f"  ✓ Response: {response.status_code} {response.reason_phrase}")
+            self.logger.info(f"  ✓ Response: {response.status_code} {response.reason_phrase}")
             response.raise_for_status()
             
             # Extract session URI from Location header
@@ -205,8 +219,8 @@ class TrainingClient:
             if not session_uri:
                 raise ValueError("No Location header in response - resumable upload session not started")
             
-            logger.info(f"✅ Resumable upload session initiated!")
-            logger.info(f"  Session URI: {session_uri[:80]}...")
+            self.logger.info(f"✅ Resumable upload session initiated!")
+            self.logger.info(f"  Session URI: {session_uri[:80]}...")
             
             return session_uri
     
@@ -236,7 +250,7 @@ class TrainingClient:
             "Content-Range": f"bytes {start_byte}-{end_byte}/{total_size if total_size else '*'}"
         }
         
-        logger.debug(f"  📦 Uploading chunk: bytes {start_byte}-{end_byte} ({chunk_size_mb:.2f} MB)")
+        self.logger.debug(f"  📦 Uploading chunk: bytes {start_byte}-{end_byte} ({chunk_size_mb:.2f} MB)")
         
         async with httpx.AsyncClient(timeout=300.0) as client:  # Long timeout for large uploads
             response = await client.put(
@@ -246,19 +260,19 @@ class TrainingClient:
             )
             
             status_code = response.status_code
-            logger.debug(f"    → Response: {status_code} {response.reason_phrase}")
+            self.logger.debug(f"    → Response: {status_code} {response.reason_phrase}")
             
             # For GCS resumable uploads:
             # - 200/201 = Upload complete
             # - 308 = Resume Incomplete (normal during chunked uploads, not an error)
             # - Other status codes = actual errors
             if status_code not in [200, 201, 308]:
-                logger.error(f"    ✗ Unexpected status code: {status_code}")
+                self.logger.error(f"    ✗ Unexpected status code: {status_code}")
                 response.raise_for_status()
             elif status_code == 308:
-                logger.debug(f"    ✓ Chunk uploaded (308 Resume Incomplete - normal)")
+                self.logger.debug(f"    ✓ Chunk uploaded (308 Resume Incomplete - normal)")
             else:
-                logger.info(f"    ✅ Upload complete! (Status: {status_code})")
+                self.logger.info(f"    ✅ Upload complete! (Status: {status_code})")
             
             return {
                 "status_code": response.status_code,
@@ -306,12 +320,12 @@ class TrainingClient:
         file_size = path.stat().st_size
         
         file_size_mb = file_size / (1024 * 1024)
-        logger.info(f"📤 Starting resumable upload")
-        logger.info(f"  File: {filename}")
-        logger.info(f"  Job ID: {job_id}")
-        logger.info(f"  Size: {file_size:,} bytes ({file_size_mb:.2f} MB)")
-        logger.info(f"  Chunk size: {chunk_size:,} bytes ({chunk_size / (1024*1024):.2f} MB)")
-        logger.info(f"  Estimated chunks: {(file_size + chunk_size - 1) // chunk_size}")
+        self.logger.info(f"📤 Starting resumable upload")
+        self.logger.info(f"  File: {filename}")
+        self.logger.info(f"  Job ID: {job_id}")
+        self.logger.info(f"  Size: {file_size:,} bytes ({file_size_mb:.2f} MB)")
+        self.logger.info(f"  Chunk size: {chunk_size:,} bytes ({chunk_size / (1024*1024):.2f} MB)")
+        self.logger.info(f"  Estimated chunks: {(file_size + chunk_size - 1) // chunk_size}")
         
         # Step 2: Initiate resumable upload session
         # Note: content_type must match what was used in request_upload_permission
@@ -319,8 +333,8 @@ class TrainingClient:
         session_uri = await self.initiate_resumable_upload(upload_url, content_type=content_type)
         
         # Step 3: Upload file in chunks (streaming from disk to avoid RAM issues)
-        logger.info(f"🚀 Starting chunked upload: {file_size:,} bytes in chunks of {chunk_size:,} bytes")
-        logger.info(f"  📝 Streaming from disk (not loading entire file into memory)")
+        self.logger.info(f"🚀 Starting chunked upload: {file_size:,} bytes in chunks of {chunk_size:,} bytes")
+        self.logger.info(f"  📝 Streaming from disk (not loading entire file into memory)")
         uploaded_bytes = 0
         
         try:
@@ -343,7 +357,7 @@ class TrainingClient:
                     if result["status_code"] in [200, 201]:
                         # Upload complete!
                         uploaded_bytes = file_size
-                        logger.info(f"Upload complete: {uploaded_bytes} bytes uploaded")
+                        self.logger.info(f"Upload complete: {uploaded_bytes} bytes uploaded")
                         break
                     elif result["status_code"] == 308:
                         # Resume Incomplete - normal during chunked uploads
@@ -362,16 +376,16 @@ class TrainingClient:
                             uploaded_bytes += len(chunk)
                     else:
                         # Unexpected status code - should not happen
-                        logger.warning(f"Unexpected status code: {result['status_code']}")
+                        self.logger.warning(f"Unexpected status code: {result['status_code']}")
                         # For unexpected status codes, still increment by chunk size
                         uploaded_bytes += len(chunk)
                     
                     progress = (uploaded_bytes / file_size) * 100
                     uploaded_mb = uploaded_bytes / (1024 * 1024)
                     total_mb = file_size / (1024 * 1024)
-                    logger.info(f"  📊 Progress: {uploaded_bytes:,}/{file_size:,} bytes ({uploaded_mb:.2f}/{total_mb:.2f} MB) - {progress:.1f}%")
+                    self.logger.info(f"  📊 Progress: {uploaded_bytes:,}/{file_size:,} bytes ({uploaded_mb:.2f}/{total_mb:.2f} MB) - {progress:.1f}%")
             
-            logger.info(f"✅ Upload complete: {uploaded_bytes:,} bytes ({uploaded_bytes / (1024*1024):.2f} MB) uploaded")
+            self.logger.info(f"✅ Upload complete: {uploaded_bytes:,} bytes ({uploaded_bytes / (1024*1024):.2f} MB) uploaded")
             return {
                 "job_id": job_id,
                 "status": "uploaded",
@@ -379,7 +393,7 @@ class TrainingClient:
             }
         
         except Exception as e:
-            logger.error(f"Upload failed at {uploaded_bytes} bytes: {e}")
+            self.logger.error(f"Upload failed at {uploaded_bytes} bytes: {e}")
             # Check how many bytes were actually uploaded
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
@@ -416,31 +430,31 @@ class TrainingClient:
         if training_params:
             payload["training_params"] = training_params
         
-        logger.info(f"📨 Notifying proxy that upload is complete")
-        logger.info(f"  Job ID: {job_id}")
-        logger.info(f"  Training params: {training_params}")
+        self.logger.info(f"📨 Notifying proxy that upload is complete")
+        self.logger.info(f"  Job ID: {job_id}")
+        self.logger.info(f"  Training params: {training_params}")
         
         # Use longer timeout for upload-complete as server may need to process/validate
         client = self._get_async_client(timeout=300.0)  # 5 minutes
         url = self._build_training_url(f"/jobs/{job_id}/upload-complete")
         
-        logger.info(f"  POST to: {url}")
-        logger.info(f"  Timeout: 300 seconds (5 minutes)")
+        self.logger.info(f"  POST to: {url}")
+        self.logger.info(f"  Timeout: 300 seconds (5 minutes)")
         
         try:
-            logger.info(f"  Sending upload-complete notification...")
+            self.logger.info(f"  Sending upload-complete notification...")
             response = await client.post(url, json=payload, headers=self._get_headers())
-            logger.info(f"  ✓ Response: {response.status_code} {response.reason_phrase}")
+            self.logger.info(f"  ✓ Response: {response.status_code} {response.reason_phrase}")
             response.raise_for_status()
             
             result = response.json()
-            logger.info(f"✅ Upload complete notification sent successfully!")
-            logger.info(f"  Job status: {result.get('status', 'N/A')}")
-            logger.info(f"  Message: {result.get('message', 'N/A')}")
+            self.logger.info(f"✅ Upload complete notification sent successfully!")
+            self.logger.info(f"  Job status: {result.get('status', 'N/A')}")
+            self.logger.info(f"  Message: {result.get('message', 'N/A')}")
             
             return result
         except httpx.ReadTimeout:
-            logger.warning(
+            self.logger.warning(
                 f"Request to notify upload complete timed out after 5 minutes. "
                 f"This may indicate the server is still processing. "
                 f"Job ID: {job_id}. You can check status later with get_job_status()."
@@ -485,15 +499,15 @@ class TrainingClient:
         client = self._get_async_client()
         url = self._build_training_url(f"/jobs/by-name/{primitive_name}")
         
-        logger.info(f"📊 Querying job status by primitive name: {primitive_name}")
-        logger.debug(f"  URL: {url}")
+        self.logger.info(f"📊 Querying job status by primitive name: {primitive_name}")
+        self.logger.debug(f"  URL: {url}")
         
         # Explicitly pass headers to ensure they're sent
         response = await client.get(url, headers=self._get_headers())
         response.raise_for_status()
         
         result = response.json()
-        logger.info(f"✅ Retrieved job status for {primitive_name}: {result.get('status', 'unknown')}")
+        self.logger.info(f"✅ Retrieved job status for {primitive_name}: {result.get('status', 'unknown')}")
         
         return result
     
@@ -528,29 +542,29 @@ class TrainingClient:
         # Explicitly pass headers to ensure they're sent (httpx may not always use constructor headers)
         # This matches how get_job_status works (which succeeds)
         headers = self._get_headers()
-        logger.debug(f"Making request to {url} with headers: X-Innate-Token present={bool(headers.get('X-Innate-Token'))}")
+        self.logger.debug(f"Making request to {url} with headers: X-Innate-Token present={bool(headers.get('X-Innate-Token'))}")
         
         try:
             response = await client.get(url, params=params, headers=headers)
         except httpx.HTTPStatusError as e:
             # If 401, log detailed debugging info
             if e.response.status_code == 401:
-                logger.error(f"401 Unauthorized for {url}")
-                logger.error(f"Response: {e.response.text[:200]}")
+                self.logger.error(f"401 Unauthorized for {url}")
+                self.logger.error(f"Response: {e.response.text[:200]}")
                 # Check if token is set
                 token_set = bool(self._innate_service_key)
                 parent_token_set = bool(self._parent.innate_service_key)
                 token_value = self._parent.innate_service_key or self._innate_service_key
-                logger.error(f"Token in TrainingClient: {token_set}")
-                logger.error(f"Token in ProxyClient: {parent_token_set}")
-                logger.error(f"Token length: {len(token_value) if token_value else 0}")
-                logger.error(f"Token preview (first 20 chars): {token_value[:20] + '...' if token_value and len(token_value) > 20 else (token_value or 'None')}")
-                logger.error(f"Proxy URL: {self.proxy_url}")
-                logger.error("⚠️  Token may be expired or invalid. Check INNATE_SERVICE_KEY environment variable.")
-                logger.error("⚠️  Server response: 'Invalid or expired authentication token'")
-                logger.error("⚠️  Action: Verify INNATE_SERVICE_KEY is correct and not expired")
-                logger.error(f"⚠️  Note: Training endpoints use /v1/training/... (not /v1/services/...)")
-                logger.error(f"⚠️  Make sure the token has permission for training endpoints")
+                self.logger.error(f"Token in TrainingClient: {token_set}")
+                self.logger.error(f"Token in ProxyClient: {parent_token_set}")
+                self.logger.error(f"Token length: {len(token_value) if token_value else 0}")
+                self.logger.error(f"Token preview (first 20 chars): {token_value[:20] + '...' if token_value and len(token_value) > 20 else (token_value or 'None')}")
+                self.logger.error(f"Proxy URL: {self.proxy_url}")
+                self.logger.error("⚠️  Token may be expired or invalid. Check INNATE_SERVICE_KEY environment variable.")
+                self.logger.error("⚠️  Server response: 'Invalid or expired authentication token'")
+                self.logger.error("⚠️  Action: Verify INNATE_SERVICE_KEY is correct and not expired")
+                self.logger.error(f"⚠️  Note: Training endpoints use /v1/training/... (not /v1/services/...)")
+                self.logger.error(f"⚠️  Make sure the token has permission for training endpoints")
             raise
         
         response.raise_for_status()
@@ -612,9 +626,9 @@ class TrainingClient:
                     pass
             except Exception:
                 pass
-            logger.error(f"Failed to get download URL for {filename} (job {job_id}): {e.response.status_code}{error_detail}")
-            logger.debug(f"Request URL: {url}")
-            logger.debug(f"Request params: filename={filename}")
+            self.logger.error(f"Failed to get download URL for {filename} (job {job_id}): {e.response.status_code}{error_detail}")
+            self.logger.debug(f"Request URL: {url}")
+            self.logger.debug(f"Request params: filename={filename}")
             raise
     
     async def download_file(
@@ -641,8 +655,8 @@ class TrainingClient:
         download_url = download_info["download_url"]
         
         # Download file using streaming to avoid RAM issues
-        logger.info(f"📥 Downloading {filename} to {output_path}")
-        logger.info(f"  📝 Streaming in chunks of {chunk_size / (1024*1024):.2f} MB (not loading entire file into memory)")
+        self.logger.info(f"📥 Downloading {filename} to {output_path}")
+        self.logger.info(f"  📝 Streaming in chunks of {chunk_size / (1024*1024):.2f} MB (not loading entire file into memory)")
         
         async with httpx.AsyncClient(timeout=300.0) as client:
             async with client.stream("GET", download_url) as response:
@@ -655,7 +669,7 @@ class TrainingClient:
                     try:
                         file_size_bytes = int(content_length)
                         file_size_mb = file_size_bytes / (1024 * 1024)
-                        logger.info(f"  📊 File size: {file_size_bytes:,} bytes ({file_size_mb:.2f} MB)")
+                        self.logger.info(f"  📊 File size: {file_size_bytes:,} bytes ({file_size_mb:.2f} MB)")
                     except (ValueError, TypeError):
                         pass
                 
@@ -671,12 +685,12 @@ class TrainingClient:
                             progress = (downloaded_bytes / file_size_bytes) * 100
                             if downloaded_bytes % (chunk_size * 4) == 0 or downloaded_bytes == file_size_bytes:
                                 downloaded_mb = downloaded_bytes / (1024 * 1024)
-                                logger.info(f"  📊 Progress: {downloaded_bytes:,}/{file_size_bytes:,} bytes ({downloaded_mb:.2f}/{file_size_mb:.2f} MB) - {progress:.1f}%")
+                                self.logger.info(f"  📊 Progress: {downloaded_bytes:,}/{file_size_bytes:,} bytes ({downloaded_mb:.2f}/{file_size_mb:.2f} MB) - {progress:.1f}%")
                         elif downloaded_bytes % (chunk_size * 4) == 0:
                             downloaded_mb = downloaded_bytes / (1024 * 1024)
-                            logger.debug(f"  📊 Downloaded: {downloaded_bytes:,} bytes ({downloaded_mb:.2f} MB)")
+                            self.logger.debug(f"  📊 Downloaded: {downloaded_bytes:,} bytes ({downloaded_mb:.2f} MB)")
         
-        logger.info(f"Download complete: {output_path}")
+        self.logger.info(f"Download complete: {output_path}")
         return output_path
     
     async def wait_for_completion(
@@ -726,7 +740,7 @@ class TrainingClient:
             
             # Only log if status changed
             if job_status != last_status:
-                logger.info(f"Job {job_id} status: {job_status} (polling every {current_interval}s)")
+                self.logger.info(f"Job {job_id} status: {job_status} (polling every {current_interval}s)")
                 last_status = job_status
             
             if job_status in ["completed", "failed", "cancelled"]:
@@ -781,9 +795,9 @@ class TrainingClient:
         if not dataset_metadata.exists():
             raise ValueError(f"Primitive folder must contain 'data/dataset_metadata.json': {primitive_path}")
         
-        logger.info(f"📦 Packaging primitive folder into tarball")
-        logger.info(f"  Source: {primitive_path}")
-        logger.info(f"  Primitive name: {primitive_name}")
+        self.logger.info(f"📦 Packaging primitive folder into tarball")
+        self.logger.info(f"  Source: {primitive_path}")
+        self.logger.info(f"  Primitive name: {primitive_name}")
         
         # Count files efficiently without storing all file objects in memory
         # Skip if it fails to avoid memory issues
@@ -799,19 +813,19 @@ class TrainingClient:
                     except (OSError, PermissionError):
                         # Skip files we can't stat
                         pass
-            logger.info(f"  Found {file_count} file(s) in data/ directory")
-            logger.info(f"  Total data size: {total_data_size:,} bytes ({total_data_size / (1024**2):.2f} MB)")
+            self.logger.info(f"  Found {file_count} file(s) in data/ directory")
+            self.logger.info(f"  Total data size: {total_data_size:,} bytes ({total_data_size / (1024**2):.2f} MB)")
         except Exception as e:
-            logger.warning(f"  Warning: Could not count files (non-critical): {e}")
-            logger.info(f"  Proceeding with tarball creation...")
+            self.logger.warning(f"  Warning: Could not count files (non-critical): {e}")
+            self.logger.info(f"  Proceeding with tarball creation...")
         
         # Create tarball in temporary directory using tar command (more memory efficient)
         with tempfile.NamedTemporaryFile(suffix='.tar.gz', delete=False) as tmp_file:
             tar_path = tmp_file.name
         
         try:
-            logger.info(f"  Creating tarball: {tar_path}")
-            logger.info(f"  Using tar command for efficient compression...")
+            self.logger.info(f"  Creating tarball: {tar_path}")
+            self.logger.info(f"  Using tar command for efficient compression...")
             
             # Use tar command instead of Python tarfile for better memory efficiency
             tar_cmd = ['tar', 'czf', tar_path, '-C', str(primitive_dir)]
@@ -822,7 +836,7 @@ class TrainingClient:
             if metadata_file.exists():
                 tar_cmd.append('metadata.json')
             
-            logger.debug(f"  Command: {' '.join(tar_cmd)}")
+            self.logger.debug(f"  Command: {' '.join(tar_cmd)}")
             
             # Run tar command - don't capture output to save memory
             # Only capture stderr for error messages
@@ -842,14 +856,14 @@ class TrainingClient:
             tar_size_mb = tar_size / (1024**2)
             compression_ratio = (1 - tar_size / total_data_size) * 100 if total_data_size > 0 else 0
             
-            logger.info(f"✅ Tarball created successfully!")
-            logger.info(f"  Size: {tar_size:,} bytes ({tar_size_mb:.2f} MB)")
-            logger.info(f"  Compression ratio: {compression_ratio:.1f}%")
-            logger.info(f"  Files included: {file_count}")
+            self.logger.info(f"✅ Tarball created successfully!")
+            self.logger.info(f"  Size: {tar_size:,} bytes ({tar_size_mb:.2f} MB)")
+            self.logger.info(f"  Compression ratio: {compression_ratio:.1f}%")
+            self.logger.info(f"  Files included: {file_count}")
             
             # Upload the tarball
             filename = f"{primitive_name}.tar.gz"
-            logger.info(f"📤 Uploading tarball: {filename}")
+            self.logger.info(f"📤 Uploading tarball: {filename}")
             
             result = await self.upload_file_resumable(
                 file_path=tar_path,
@@ -868,9 +882,9 @@ class TrainingClient:
             try:
                 if Path(tar_path).exists():
                     Path(tar_path).unlink()
-                    logger.debug(f"  Cleaned up temporary tarball: {tar_path}")
+                    self.logger.debug(f"  Cleaned up temporary tarball: {tar_path}")
             except Exception as e:
-                logger.warning(f"Failed to delete temporary tarball: {e}")
+                self.logger.warning(f"Failed to delete temporary tarball: {e}")
     
     async def close(self):
         """Close the HTTP client."""
