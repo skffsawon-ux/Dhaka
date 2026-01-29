@@ -11,8 +11,10 @@
 #include "geometry_msgs/msg/polygon_stamped.hpp"
 #include "geometry_msgs/msg/polygon.hpp"
 #include "geometry_msgs/msg/point.hpp"
+#include "geometry_msgs/msg/point_stamped.hpp"
 #include "tf2_msgs/msg/tf_message.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/float64.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
@@ -52,12 +54,16 @@ public:
 
     // Create publisher for footprint (Polygon type for costmaps)
     footprint_publisher_ = this->create_publisher<geometry_msgs::msg::Polygon>("/footprint", 10);
+    
+    // Create publisher for robot height
+    height_publisher_ = this->create_publisher<std_msgs::msg::Float64>("/footprint/height", 10);
 
     // Only create debug publishers if debug mode is enabled
     if (debug_mode) {
-      collision_points_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/collision_points", 10);
-      collision_boxes_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/collision_boxes", 10);
-      robot_hull_publisher_ = this->create_publisher<visualization_msgs::msg::Marker>("/robot_convex_hull", 10);
+      collision_points_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/footprint/collision_points", 10);
+      collision_boxes_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/footprint/collision_boxes", 10);
+      robot_hull_publisher_ = this->create_publisher<visualization_msgs::msg::Marker>("/footprint/robot_convex_hull", 10);
+      height_point_publisher_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/footprint/height_point", 10);
     }
 
     // Create a timer based on update_frequency param
@@ -160,9 +166,11 @@ private:
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
   rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr footprint_publisher_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr height_publisher_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr collision_points_publisher_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr collision_boxes_publisher_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr robot_hull_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr height_point_publisher_;
   rclcpp::TimerBase::SharedPtr timer_;
   std::string robot_description_;
   std::shared_ptr<urdf::Model> urdf_model_;
@@ -317,12 +325,16 @@ private:
   void process_collision_boxes()
   {
     const bool debug_mode = this->get_parameter("debug").as_bool();
+    const double padding = this->get_parameter("padding").as_double();
     visualization_msgs::msg::MarkerArray points_array;
     visualization_msgs::msg::MarkerArray boxes_array;
     int marker_id = 0;
 
     std::vector<Point2> all_points_xy;
     all_points_xy.reserve(512);
+    double max_z = 0.0;  // Track maximum height of collision geometry
+    geometry_msgs::msg::PointStamped tallest_point;  // Track the tallest point
+    tallest_point.header.frame_id = "base_link";
 
     for (const auto & link_pair : urdf_model_->links_) {
       const auto & link = link_pair.second;
@@ -390,13 +402,18 @@ private:
             geometry_msgs::msg::PointStamped transformed;
             transformed = tf_buffer_.transform(corners[c], "base_link", 
                                                tf2::durationFromSec(0.1));
+            // Track max Z before projecting to XY plane
+            if (transformed.point.z > max_z) {
+              max_z = transformed.point.z;
+              tallest_point = transformed;
+              tallest_point.header.stamp = this->get_clock()->now();
+            }
             transformed.point.z = 0.0;
             all_points_xy.push_back(Point2{transformed.point.x, transformed.point.y});
           }
 
           // Only create debug markers if debug mode is enabled
           if (debug_mode) {
-            // Create marker for corner points (projected to z=0 in base_link)
             visualization_msgs::msg::Marker points_marker;
             points_marker.header.frame_id = "base_link";
             points_marker.header.stamp = this->get_clock()->now();
@@ -412,6 +429,8 @@ private:
             points_marker.color.b = 0.0;
             points_marker.color.a = 1.0;
             points_marker.lifetime = rclcpp::Duration::from_seconds(2.5);
+            visualization_msgs::msg::Marker points_marker_3d = points_marker;
+
 
             // Re-transform for marker points
             for (size_t c = 0; c < 8; ++c) {
@@ -421,40 +440,19 @@ private:
               transformed.point.z = 0.0;
               points_marker.points.push_back(transformed.point);
             }
-            points_array.markers.push_back(points_marker);
+            boxes_array.markers.push_back(points_marker);
 
-            // Create a box marker (CUBE) in base_link using the collision origin pose
-            geometry_msgs::msg::PoseStamped collision_pose;
-            collision_pose.header.frame_id = link_name;
-            collision_pose.header.stamp = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
-            collision_pose.pose.position.x = collision->origin.position.x;
-            collision_pose.pose.position.y = collision->origin.position.y;
-            collision_pose.pose.position.z = collision->origin.position.z;
-            collision_pose.pose.orientation.x = collision->origin.rotation.x;
-            collision_pose.pose.orientation.y = collision->origin.rotation.y;
-            collision_pose.pose.orientation.z = collision->origin.rotation.z;
-            collision_pose.pose.orientation.w = collision->origin.rotation.w;
 
-            geometry_msgs::msg::PoseStamped collision_pose_base;
-            collision_pose_base = tf_buffer_.transform(collision_pose, "base_link", tf2::durationFromSec(0.1));
+            points_marker_3d.scale.z = 0.02;  // Enable 3D visualization
+            // Add 3D points (with actual Z values)
+            for (size_t c = 0; c < 8; ++c) {
+              geometry_msgs::msg::PointStamped transformed;
+              transformed = tf_buffer_.transform(corners[c], "base_link", 
+                                                 tf2::durationFromSec(0.1));
+              points_marker_3d.points.push_back(transformed.point);
+            }
+            points_array.markers.push_back(points_marker_3d);
 
-            visualization_msgs::msg::Marker box_marker;
-            box_marker.header.frame_id = "base_link";
-            box_marker.header.stamp = this->get_clock()->now();
-            box_marker.ns = "collision_boxes";
-            box_marker.id = marker_id++;
-            box_marker.type = visualization_msgs::msg::Marker::CUBE;
-            box_marker.action = visualization_msgs::msg::Marker::ADD;
-            box_marker.pose = collision_pose_base.pose;
-            box_marker.scale.x = box->dim.x;
-            box_marker.scale.y = box->dim.y;
-            box_marker.scale.z = box->dim.z;
-            box_marker.color.r = 0.0;
-            box_marker.color.g = 0.5;
-            box_marker.color.b = 1.0;
-            box_marker.color.a = 0.15;
-            box_marker.lifetime = rclcpp::Duration::from_seconds(2.5);
-            boxes_array.markers.push_back(box_marker);
           }
 
           RCLCPP_DEBUG(this->get_logger(), 
@@ -484,7 +482,6 @@ private:
     if (all_points_xy.size() >= 3) {
       const auto hull = convex_hull(std::move(all_points_xy));
       if (hull.size() >= 3) {
-        const double padding = this->get_parameter("padding").as_double();
 
         std::vector<geometry_msgs::msg::Point> padded_hull_points;
         padded_hull_points.reserve(hull.size());
@@ -514,6 +511,15 @@ private:
           RCLCPP_DEBUG(this->get_logger(), "Published /footprint convex hull with %zu vertices", hull.size());
         }
 
+        // Publish the max height of the robot collision geometry
+        {
+          std_msgs::msg::Float64 height_msg;
+          height_msg.data = max_z + padding;
+          height_publisher_->publish(height_msg);
+          RCLCPP_DEBUG(this->get_logger(), "Published /footprint/height: %.3f m (max_z=%.3f, padding=%.3f)", 
+                       height_msg.data, max_z, padding);
+        }
+
         // Only publish hull marker if debug mode
         if (debug_mode) {
           visualization_msgs::msg::Marker hull_marker;
@@ -539,6 +545,14 @@ private:
 
           robot_hull_publisher_->publish(hull_marker);
           RCLCPP_DEBUG(this->get_logger(), "Published robot convex hull with %zu vertices (padding=%.3f)", hull.size(), padding);
+
+          // Publish the tallest point
+          if (debug_mode && height_point_publisher_ && max_z > 0) {
+            tallest_point.point.z += padding;
+            height_point_publisher_->publish(tallest_point);
+            RCLCPP_DEBUG(this->get_logger(), "Published /footprint/height_point: (%.3f, %.3f, %.3f)", 
+                         tallest_point.point.x, tallest_point.point.y, tallest_point.point.z);
+          }
         }
       }
     }
