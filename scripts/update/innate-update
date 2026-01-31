@@ -789,6 +789,10 @@ class UpdateManager:
 
     def quick_check(self) -> int:
         """Quick silent check for .zshrc integration."""
+        # Skip update check if SKIP_UPDATE_CHECK is set (e.g., simulation mode)
+        if os.environ.get("SKIP_UPDATE_CHECK"):
+            return 0
+            
         self._check_repo()
 
         # Use cache if recent (less than 1 hour)

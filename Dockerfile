@@ -5,18 +5,31 @@
 # Start with a minimal ROS 2 Humble base
 FROM ros:humble-ros-base
 
+# Build argument to choose between simulation and hardware mode
+# Usage: docker build --build-arg MODE=simulation .
+#        docker build --build-arg MODE=hardware .
+ARG MODE=simulation
+
 # 1. Install base packages needed before apt-dependencies.txt
 RUN apt-get update && apt-get install -y \
     curl \
     iputils-ping
 
-# 2. Copy and install all apt dependencies from the central list
-COPY ros2_ws/apt-dependencies.txt /tmp/apt-dependencies.txt
+# 2. Copy and install common apt dependencies
+COPY ros2_ws/apt-dependencies.common.txt /tmp/apt-dependencies.common.txt
 RUN apt-get update && \
-    grep -v '^#' /tmp/apt-dependencies.txt | grep -v '^$' | xargs apt-get install -y && \
-    rm /tmp/apt-dependencies.txt
+    grep -v '^#' /tmp/apt-dependencies.common.txt | grep -v '^$' | xargs apt-get install -y && \
+    rm /tmp/apt-dependencies.common.txt
 
-# 3. Install pip packages
+# 3. Install hardware-specific dependencies if in hardware mode
+COPY ros2_ws/apt-dependencies.hardware.txt /tmp/apt-dependencies.hardware.txt
+RUN if [ "$MODE" = "hardware" ]; then \
+        apt-get update && \
+        grep -v '^#' /tmp/apt-dependencies.hardware.txt | grep -v '^$' | xargs apt-get install -y; \
+    fi && \
+    rm /tmp/apt-dependencies.hardware.txt
+
+# 4. Install pip packages
 RUN pip install --upgrade \
     websockets \
     pydantic \
@@ -28,24 +41,24 @@ RUN pip install --upgrade \
     torchvision \
     einops
 
-# 4. Install oh-my-zsh (for root, since containers typically run as root unless changed)
+# 5. Install oh-my-zsh (for root, since containers typically run as root unless changed)
 #    The official install script tries to prompt, so we run it in a way that doesn't hang.
 RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" \
     || true
 
-# 5. Make zsh the default shell for root inside the container
+# 6. Make zsh the default shell for root inside the container
 SHELL ["/usr/bin/zsh", "-c"]
 RUN chsh -s /usr/bin/zsh root
 
-# 6. (Optional) Change oh-my-zsh theme for root
+# 7. (Optional) Change oh-my-zsh theme for root
 #    RobbyRussell is default; here we switch to `agnoster`, or pick another if you like
 RUN sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="agnoster"/' /root/.zshrc
 
-# 6b. Pre-approve GitHub SSH host key to avoid prompts
+# 7b. Pre-approve GitHub SSH host key to avoid prompts
 RUN mkdir -p /root/.ssh && \
     ssh-keyscan -t ed25519 github.com >> /root/.ssh/known_hosts 2>/dev/null
 
-# 7. Copy your entire innate-os directory (including dds, ros2_ws, .git for version info)
+# 8. Copy your entire innate-os directory (including dds, ros2_ws, .git for version info)
 COPY ros2_ws /root/innate-os/ros2_ws
 COPY dds /root/innate-os/dds
 COPY scripts /root/innate-os/scripts
@@ -53,13 +66,13 @@ COPY scripts /root/innate-os/scripts
 # For version tracking, git needs to be present
 COPY .git /root/innate-os/.git
 
-# 8. Build your ROS 2 workspace.
+# 9. Build your ROS 2 workspace.
 #    We have to source the system setup.zsh for colcon to find ROS packages.
 WORKDIR /root/innate-os/ros2_ws
 RUN source /opt/ros/humble/setup.zsh && colcon build
 
 #
-# 9. Patch the root .zshrc to set up your environment the same way
+# 10. Patch the root .zshrc to set up your environment the same way
 #    "setup_dds.zsh" does. This means:
 #      - Source ROS 2
 #      - Source your workspace
@@ -87,7 +100,7 @@ source /root/innate-os/dds/setup_dds.zsh\n\
 export INNATE_OS_ROOT=/root/innate-os\n\
 ' >> /root/.zshrc
 
-# 10. When the container starts with no command, we just run zsh (login shell).
+# 11. When the container starts with no command, we just run zsh (login shell).
 #    You'll drop into an interactive oh-my-zsh environment with everything set up.
 WORKDIR /root/innate-os
 CMD ["zsh", "-l"]

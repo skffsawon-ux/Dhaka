@@ -28,6 +28,8 @@ It is designed on a few **core principles**:
 
 If you don't have a robot, you can simply start the Innate OS in simulation mode, then use [our simulator](https://github.com/innate-inc/genesis-sim) to try out the robot with a web interface.
 
+> **Note:** The Docker build defaults to simulation mode, which skips NVIDIA Jetson-specific packages. See [SIMULATION_MODE.md](SIMULATION_MODE.md) for details on switching between simulation and hardware modes.
+
 First build the container:
 
 ```bash

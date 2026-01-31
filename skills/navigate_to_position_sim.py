@@ -54,7 +54,7 @@ class SimPathPlanningController:
             self._navigation_complete.set()
         self.logger.info(f"Navigation status: {self._navigation_status}")
 
-    def go_to_position(self, x: float, y: float, theta: float):
+    def go_to_position(self, x: float, y: float, theta: float, local_frame: bool = False):
         """
         Plans a path to the goal and sends it to the simulator for execution.
 
@@ -62,6 +62,8 @@ class SimPathPlanningController:
             x (float): x-coordinate of the target position.
             y (float): y-coordinate of the target position.
             theta (float): The orientation angle in radians.
+            local_frame (bool): If True, coordinates are relative to robot's current position (base_link).
+                               If False, coordinates are in the map frame.
 
         Returns:
             str: Navigation result ("SUCCEEDED", "FAILED", "CANCELED")
@@ -73,7 +75,7 @@ class SimPathPlanningController:
 
         # Create goal pose
         goal_pose = PoseStamped()
-        goal_pose.header.frame_id = "map"
+        goal_pose.header.frame_id = "base_link" if local_frame else "map"
         goal_pose.header.stamp = self.navigator.get_clock().now().to_msg()
         goal_pose.pose.position.x = x
         goal_pose.pose.position.y = y
@@ -85,7 +87,7 @@ class SimPathPlanningController:
         goal_pose.pose.orientation.z = math.sin(theta / 2.0)
         goal_pose.pose.orientation.w = math.cos(theta / 2.0)
 
-        self.logger.debug(f"Planning path to: x={x}, y={y}, theta={theta}")
+        self.logger.debug(f"Planning path to: x={x}, y={y}, theta={theta}, frame={goal_pose.header.frame_id}")
 
         # Get the global path from Nav2
         path = self.navigator.getPath(goal_pose, goal_pose, use_start=False)
@@ -136,16 +138,17 @@ class NavigateToPositionSim(Skill):
         return (
             "Use when you need to navigate the robot to the specified position "
             "using provided x, y coordinates, and theta (yaw) angle IN RADIANS. "
-            "Can be used to navigate to a specific point in the map. "
+            "If local_frame is set to false, it navigates to a specific point in the map. "
+            "If local_frame is set to true, it navigates locally, where the robot is currently (0,0). "
             "This version uses Nav2 for path planning but sends the plan to the simulator for execution."
         )
 
-    def execute(self, x: float, y: float, theta: float):
+    def execute(self, x: float, y: float, theta: float, local_frame: bool = False):
         self.logger.info(
-            f"Planning and executing navigation to position: x={x}, y={y}, theta={theta}"
+            f"Planning and executing navigation to position: x={x}, y={y}, theta={theta}, local_frame={local_frame}"
         )
 
-        result = self.path_controller.go_to_position(x, y, theta)
+        result = self.path_controller.go_to_position(x, y, theta, local_frame)
 
         # Process result
         if result == "CANCELED":
@@ -153,7 +156,7 @@ class NavigateToPositionSim(Skill):
             return "Navigation canceled", SkillResult.CANCELLED
         elif result == "SUCCEEDED":
             self.logger.info(
-                f"Navigation complete. Arrived at position: x={x}, y={y}, theta={theta}"
+                f"Navigation complete. Arrived at position: x={x}, y={y}, theta={theta}, local_frame={local_frame}"
             )
             return f"Reached position ({x}, {y}, {theta})", SkillResult.SUCCESS
         else:

@@ -1,0 +1,9 @@
+# Hardware-specific dependencies for innate-os (NVIDIA Jetson)
+# These are only required when running on physical robot hardware
+# Install with: xargs -a apt-dependencies.hardware.txt sudo apt-get install -y
+
+# NVIDIA VPI (for stereo depth estimation in maurice_cam)
+nvidia-vpi-dev
+
+# NVIDIA GStreamer plugins (for nvvidconv hardware acceleration on Jetson)
+nvidia-l4t-gstreamer
