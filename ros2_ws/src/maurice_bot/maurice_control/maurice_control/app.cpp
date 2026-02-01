@@ -32,6 +32,30 @@ using namespace std::chrono_literals;
 namespace maurice_control {
 
 /**
+ * Check if running inside a Docker container.
+ * Returns true if inside Docker, false otherwise.
+ */
+bool is_running_in_docker() {
+    // Check for /.dockerenv file (most reliable)
+    if (std::filesystem::exists("/.dockerenv")) {
+        return true;
+    }
+    // Fallback: check cgroup for docker/container indicators
+    std::ifstream cgroup("/proc/1/cgroup");
+    if (cgroup.is_open()) {
+        std::string line;
+        while (std::getline(cgroup, line)) {
+            if (line.find("docker") != std::string::npos ||
+                line.find("kubepods") != std::string::npos ||
+                line.find("containerd") != std::string::npos) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
  * Execute a shell command and return its output (trimmed).
  */
 std::string exec_command(const std::string& cmd) {
@@ -74,9 +98,16 @@ std::string get_bluetooth_device_id() {
 /**
  * Get the system hostname.
  * Returns the hostname as a string, or empty string if not available.
+ * In Docker, skips avahi-resolve (not available) and uses simple hostname.
  */
 std::string get_hostname() {
-    std::string result = exec_command("avahi-resolve -a $(hostname -I | awk '{print $1}') | awk '{print $2}' 2>/dev/null");
+    std::string result;
+    
+    // Skip avahi-resolve in Docker (not available)
+    if (!is_running_in_docker()) {
+        result = exec_command("avahi-resolve -a $(hostname -I | awk '{print $1}') | awk '{print $2}' 2>/dev/null");
+    }
+    
     if (result.empty()) {
         // Fallback to hostname command
         result = exec_command("hostname 2>/dev/null") + ".local";
@@ -225,8 +256,12 @@ std::string sanitize_hostname(const std::string& hostname) {
 /**
  * Get current system hostname using hostnamectl command.
  * Returns the current hostname as a string.
+ * In Docker, returns empty string (hostnamectl requires systemd).
  */
 std::string get_system_hostname() {
+    if (is_running_in_docker()) {
+        return "";
+    }
     return exec_command("sudo hostnamectl hostname --static 2>/dev/null");
 }
 
@@ -235,8 +270,14 @@ std::string get_system_hostname() {
  * Sets the static hostname using the hostnamectl command-line tool.
  * Uses sudo to run with elevated privileges.
  * Returns true on success, false on failure.
+ * In Docker, this is a no-op (hostnamectl requires systemd).
  */
 bool set_system_hostname(const std::string& sanitized_hostname, std::string& error_msg) {
+    // Skip in Docker - hostnamectl requires systemd which isn't available
+    if (is_running_in_docker()) {
+        return true;  // Silently succeed - hostname sync not applicable in containers
+    }
+    
     // Use sudo hostnamectl to set the hostname
     std::string cmd = "sudo hostnamectl hostname --static \"" + sanitized_hostname + "\" 2>&1";
     
@@ -315,6 +356,11 @@ public:
         this->declare_parameter("data_directory", maurice_root + "/data");
         this->declare_parameter("robot_name", "");
         this->declare_parameter("default_hardware_revision", "R6");
+        
+        // Log if running in Docker (system hostname operations will be skipped)
+        if (is_running_in_docker()) {
+            RCLCPP_INFO(this->get_logger(), "Running in Docker - system hostname operations disabled");
+        }
 
         // Subscribe to joystick messages (Vector3)
         joystick_sub_ = this->create_subscription<geometry_msgs::msg::Vector3>(
