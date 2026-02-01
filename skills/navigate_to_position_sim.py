@@ -8,6 +8,8 @@ from nav2_simple_commander.robot_navigator import BasicNavigator
 from brain_client.skill_types import Skill, SkillResult
 import rclpy
 from rclpy.node import Node
+import tf2_ros
+from tf2_geometry_msgs import do_transform_pose_stamped
 
 
 class SimPathPlanningController:
@@ -45,6 +47,10 @@ class SimPathPlanningController:
         self._cancel_requested = threading.Event()
         self._navigation_complete = threading.Event()
 
+        # TF2 for coordinate transformations
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self.node)
+
         self.logger.info("Simulator path planning controller created")
 
     def _status_callback(self, msg):
@@ -54,7 +60,9 @@ class SimPathPlanningController:
             self._navigation_complete.set()
         self.logger.info(f"Navigation status: {self._navigation_status}")
 
-    def go_to_position(self, x: float, y: float, theta: float, local_frame: bool = False):
+    def go_to_position(
+        self, x: float, y: float, theta: float, local_frame: bool = False
+    ):
         """
         Plans a path to the goal and sends it to the simulator for execution.
 
@@ -73,7 +81,7 @@ class SimPathPlanningController:
         self._navigation_complete.clear()
         self._navigation_status = "IDLE"
 
-        # Create goal pose
+        # Create goal pose in original frame
         goal_pose = PoseStamped()
         goal_pose.header.frame_id = "base_link" if local_frame else "map"
         goal_pose.header.stamp = self.navigator.get_clock().now().to_msg()
@@ -87,21 +95,78 @@ class SimPathPlanningController:
         goal_pose.pose.orientation.z = math.sin(theta / 2.0)
         goal_pose.pose.orientation.w = math.cos(theta / 2.0)
 
-        self.logger.debug(f"Planning path to: x={x}, y={y}, theta={theta}, frame={goal_pose.header.frame_id}")
+        self.logger.info(
+            f"[NavSim] Planning path to: x={x}, y={y}, theta={theta}, frame={goal_pose.header.frame_id}, local_frame={local_frame}"
+        )
+
+        # If local_frame, transform goal from base_link to odom frame
+        if local_frame:
+            try:
+                # Spin multiple times to allow TF buffer to populate
+                for _ in range(10):
+                    rclpy.spin_once(self.node, timeout_sec=0.1)
+
+                # Check if odom frame exists, try map as fallback
+                target_frame = "odom"
+                if not self.tf_buffer.can_transform(
+                    "odom", "base_link", rclpy.time.Time()
+                ):
+                    if self.tf_buffer.can_transform(
+                        "map", "base_link", rclpy.time.Time()
+                    ):
+                        target_frame = "map"
+                    else:
+                        self.logger.warning(
+                            "[NavSim] No TF available, using goal as-is in base_link frame"
+                        )
+                        # Skip transformation, Nav2 should handle base_link frame
+                        goal_pose.header.frame_id = "base_link"
+                        target_frame = None
+
+                if target_frame:
+                    transform = self.tf_buffer.lookup_transform(
+                        target_frame,
+                        "base_link",
+                        rclpy.time.Time(),
+                        timeout=rclpy.duration.Duration(seconds=2.0),
+                    )
+
+                    # Transform the goal pose
+                    goal_pose_transformed = do_transform_pose_stamped(
+                        goal_pose, transform
+                    )
+                    self.logger.info(
+                        f"[NavSim] Transformed goal from base_link to {target_frame}: ({goal_pose.pose.position.x:.2f}, {goal_pose.pose.position.y:.2f}) -> ({goal_pose_transformed.pose.position.x:.2f}, {goal_pose_transformed.pose.position.y:.2f})"
+                    )
+                    goal_pose = goal_pose_transformed
+            except Exception as e:
+                self.logger.error(f"[NavSim] Failed to transform goal: {e}")
+                return "FAILED"
 
         # Get the global path from Nav2
+        self.logger.info(
+            f"[NavSim] Requesting path from Nav2 with goal_pose: pos=({goal_pose.pose.position.x:.2f}, {goal_pose.pose.position.y:.2f}), frame={goal_pose.header.frame_id}"
+        )
         path = self.navigator.getPath(goal_pose, goal_pose, use_start=False)
 
         if path is None:
-            self.logger.error("Failed to get path to goal")
+            self.logger.error("[NavSim] Failed to get path to goal")
             return "FAILED"
 
-        self.logger.info(f"Generated path with {len(path.poses)} waypoints")
+        self.logger.info(f"[NavSim] Generated path with {len(path.poses)} waypoints")
+        if path.poses:
+            first_pose = path.poses[0].pose.position
+            last_pose = path.poses[-1].pose.position
+            self.logger.info(
+                f"[NavSim] Path: first=({first_pose.x:.2f}, {first_pose.y:.2f}), last=({last_pose.x:.2f}, {last_pose.y:.2f}), frame={path.header.frame_id}"
+            )
 
         # Send the path and goal to the simulator
         self.path_publisher.publish(path)
 
-        self.logger.debug("Path sent to simulator")
+        self.logger.info(
+            "[NavSim] Path sent to simulator via /sim_navigation/global_plan"
+        )
 
         # Wait for simulator to complete navigation or handle cancellation
         while not self._navigation_complete.is_set():
@@ -145,7 +210,7 @@ class NavigateToPositionSim(Skill):
 
     def execute(self, x: float, y: float, theta: float, local_frame: bool = False):
         self.logger.info(
-            f"Planning and executing navigation to position: x={x}, y={y}, theta={theta}, local_frame={local_frame}"
+            f"[NavSim] execute() called with: x={x}, y={y}, theta={theta} ({math.degrees(theta):.1f}°), local_frame={local_frame}"
         )
 
         result = self.path_controller.go_to_position(x, y, theta, local_frame)
