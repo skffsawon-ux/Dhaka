@@ -20,7 +20,7 @@ TMUX_SESSION := mars
 help:
 	@echo "Innate OS - Available commands:"
 	@echo "  make sim     - Start simulation (one-liner: build + up + launch + attach)"
-	@echo "  make build   - Build Docker image"
+	@echo "  make build   - Clear build volumes + rebuild Docker image"
 	@echo "  make up      - Start containers"
 	@echo "  make down    - Stop containers"
 	@echo "  make shell   - Open a shell in the container"
@@ -37,8 +37,10 @@ sim: up
 		docker compose -f $(COMPOSE_FILE) exec $(CONTAINER) zsh -lc './scripts/launch_sim_in_tmux.zsh && tmux attach -t $(TMUX_SESSION)'; \
 	fi
 
-# Build Docker image
-build:
+# Build Docker image (clears build volumes to ensure fresh build)
+build: down
+	@echo "Removing build volumes..."
+	docker volume rm innate-os_ros2_ws_build innate-os_ros2_ws_install innate-os_ros2_ws_log 2>/dev/null || true
 	docker compose -f $(COMPOSE_FILE) build
 
 # Start containers (build if needed)
