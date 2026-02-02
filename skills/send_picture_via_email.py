@@ -4,7 +4,7 @@ import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
-from brain_client.skill_types import Skill, SkillResult, RobotStateType
+from brain_client.skill_types import Skill, SkillResult, RobotState, RobotStateType
 
 
 class SendPictureViaEmail(Skill):
@@ -12,33 +12,21 @@ class SendPictureViaEmail(Skill):
     Primitive for sending an email with an attached picture.
     """
 
+    # Declare required robot state using descriptor
+    image = RobotState(RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64)
+
     def __init__(self, logger):
-        self.logger = logger
+        super().__init__(logger)
         self.default_recipient = "axel@innate.bot"
         # Email server configuration (same as SendEmail)
         self.smtp_server = "smtp.gmail.com"
         self.smtp_port = 587
         self.sender_email = "axel@innate.bot"
         self.password = ""  # Use app password for Gmail
-        self.last_main_camera_image_b64 = None
 
     @property
     def name(self):
         return "send_picture_via_email"
-
-    def get_required_robot_states(self) -> list[RobotStateType]:
-        """Declare that this primitive needs the last image."""
-        return [RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64]
-
-    def update_robot_state(self, **kwargs):
-        """Store the last image received from the robot state."""
-        self.last_main_camera_image_b64 = kwargs.get(
-            RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64.value
-        )
-        if self.last_main_camera_image_b64:
-            self.logger.info("[SendPictureViaEmail] Received image for email.")
-        else:
-            self.logger.warn("[SendPictureViaEmail] Did not receive image for email.")
 
     def guidelines(self):
         return (
@@ -62,7 +50,7 @@ class SendPictureViaEmail(Skill):
         if not recipient:  # Checks for None or empty string
             recipient = self.default_recipient
 
-        if not self.last_main_camera_image_b64:
+        if not self.image:
             self.logger.error("[SendPictureViaEmail] No image available to send.")
             return "No image available to send", SkillResult.FAILURE
 
@@ -72,7 +60,7 @@ class SendPictureViaEmail(Skill):
 
         try:
             # Decode the base64 image
-            image_data = base64.b64decode(self.last_main_camera_image_b64)
+            image_data = base64.b64decode(self.image)
 
             # Create message
             msg = MIMEMultipart()

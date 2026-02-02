@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from enum import Enum
+from typing import Any
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
@@ -27,6 +28,39 @@ class RobotStateType(Enum):
     LAST_ODOM = "last_odom"
     LAST_MAP = "last_map"
     LAST_HEAD_POSITION = "last_head_position"
+
+
+class RobotState:
+    """
+    Descriptor for declaring and accessing robot state in skills.
+
+    Usage:
+        class MySkill(Skill):
+            image = RobotState(RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64)
+            odom = RobotState(RobotStateType.LAST_ODOM)
+
+            def execute(self):
+                if self.image:  # Access state directly
+                    ...
+    """
+
+    def __init__(self, state_type: RobotStateType):
+        self.state_type = state_type
+        self._attr_name: str | None = None
+
+    def __set_name__(self, owner: type, name: str):
+        """Called when the descriptor is assigned to a class attribute."""
+        self._attr_name = f"_robot_state_{name}"
+
+    def __get__(self, obj: Any, objtype: type | None = None) -> Any:
+        """Get the current state value."""
+        if obj is None:
+            return self
+        return getattr(obj, self._attr_name, None)
+
+    def __set__(self, obj: Any, value: Any):
+        """Set the state value."""
+        setattr(obj, self._attr_name, value)
 
 
 class Skill(ABC):
@@ -76,18 +110,32 @@ class Skill(ABC):
     def update_robot_state(self, **kwargs):
         """
         Update the primitive with the latest robot state.
-        Subclasses can override this to store relevant data.
-        Example: self.last_image = kwargs.get('last_image_b64')
+        Automatically populates RobotState descriptors defined on the class.
+        Subclasses can override this to add custom handling.
         """
-        pass
+        # Auto-populate RobotState descriptors
+        for name, descriptor in self._get_robot_state_descriptors().items():
+            state_key = descriptor.state_type.value
+            if state_key in kwargs:
+                setattr(self, name, kwargs[state_key])
 
     def get_required_robot_states(self) -> list[RobotStateType]:
         """
         Declare the robot states required by this primitive.
-        Subclasses should override this to specify their needs.
-        Returns a list of RobotStateType enum members.
+        Automatically collects from RobotState descriptors defined on the class.
         """
-        return []
+        return [
+            desc.state_type for desc in self._get_robot_state_descriptors().values()
+        ]
+
+    def _get_robot_state_descriptors(self) -> dict[str, "RobotState"]:
+        """Collect all RobotState descriptors from the class."""
+        descriptors = {}
+        for cls in type(self).__mro__:
+            for name, attr in vars(cls).items():
+                if isinstance(attr, RobotState) and name not in descriptors:
+                    descriptors[name] = attr
+        return descriptors
 
     def guidelines(self):
         """
