@@ -29,6 +29,7 @@ if(NOT nlohmann_json_FOUND)
 endif()
 
 # Find VPI (NVIDIA Vision Programming Interface) for stereo depth estimation
+# VPI is only required on NVIDIA Jetson hardware, not for simulation
 set(VPI_ROOT "/opt/nvidia/vpi3")
 find_path(VPI_INCLUDE_DIR vpi/VPI.h PATHS ${VPI_ROOT}/include)
 find_library(VPI_LIBRARY nvvpi PATHS ${VPI_ROOT}/lib64 ${VPI_ROOT}/lib)
@@ -36,8 +37,11 @@ find_library(VPI_LIBRARY nvvpi PATHS ${VPI_ROOT}/lib64 ${VPI_ROOT}/lib)
 if(VPI_INCLUDE_DIR AND VPI_LIBRARY)
   set(VPI_FOUND TRUE)
   message(STATUS "Found VPI: ${VPI_LIBRARY}")
+  message(STATUS "VPI-dependent components (stereo_depth_estimator) will be built")
 else()
-  message(FATAL_ERROR "VPI not found at ${VPI_ROOT}. Please install nvidia-vpi-dev package.")
+  set(VPI_FOUND FALSE)
+  message(WARNING "VPI not found at ${VPI_ROOT}. Stereo depth estimator will not be built.")
+  message(WARNING "This is expected for simulation builds. For hardware builds, install nvidia-vpi-dev package.")
 endif()
 
 # Set Python version

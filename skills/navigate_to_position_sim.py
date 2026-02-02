@@ -8,6 +8,7 @@ from nav2_simple_commander.robot_navigator import BasicNavigator
 from brain_client.skill_types import Skill, SkillResult
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
 
 class SimPathPlanningController:
@@ -19,8 +20,8 @@ class SimPathPlanningController:
         self.logger = logger
         self._send_feedback = primitive._send_feedback
 
-        # Create Nav2 navigator for path planning only
-        self.navigator = BasicNavigator()
+        # Create Nav2 navigator (sim uses default namespace - single planner)
+        self.navigator = BasicNavigator(namespace="")
 
         # Create a minimal ROS2 node for publishing
         if not rclpy.ok():
@@ -44,17 +45,26 @@ class SimPathPlanningController:
         self._navigation_status = "IDLE"  # IDLE, ACTIVE, SUCCEEDED, FAILED, CANCELED
         self._cancel_requested = threading.Event()
         self._navigation_complete = threading.Event()
+        self._waiting_for_status = False  # Only accept status after path is sent
 
         self.logger.info("Simulator path planning controller created")
 
     def _status_callback(self, msg):
         """Callback for navigation status updates from simulator"""
+        if not self._waiting_for_status:
+            self.logger.debug(
+                f"Ignoring status '{msg.data}' - not waiting for navigation"
+            )
+            return
         self._navigation_status = msg.data
         if self._navigation_status in ["SUCCEEDED", "FAILED", "CANCELED"]:
             self._navigation_complete.set()
+            self._waiting_for_status = False
         self.logger.info(f"Navigation status: {self._navigation_status}")
 
-    def go_to_position(self, x: float, y: float, theta: float):
+    def go_to_position(
+        self, x: float, y: float, theta: float, local_frame: bool = False
+    ):
         """
         Plans a path to the goal and sends it to the simulator for execution.
 
@@ -62,6 +72,8 @@ class SimPathPlanningController:
             x (float): x-coordinate of the target position.
             y (float): y-coordinate of the target position.
             theta (float): The orientation angle in radians.
+            local_frame (bool): If True, coordinates are relative to robot's current position (base_link).
+                               If False, coordinates are in the map frame.
 
         Returns:
             str: Navigation result ("SUCCEEDED", "FAILED", "CANCELED")
@@ -71,9 +83,9 @@ class SimPathPlanningController:
         self._navigation_complete.clear()
         self._navigation_status = "IDLE"
 
-        # Create goal pose
+        # Create goal pose in original frame
         goal_pose = PoseStamped()
-        goal_pose.header.frame_id = "map"
+        goal_pose.header.frame_id = "base_link" if local_frame else "map"
         goal_pose.header.stamp = self.navigator.get_clock().now().to_msg()
         goal_pose.pose.position.x = x
         goal_pose.pose.position.y = y
@@ -85,23 +97,40 @@ class SimPathPlanningController:
         goal_pose.pose.orientation.z = math.sin(theta / 2.0)
         goal_pose.pose.orientation.w = math.cos(theta / 2.0)
 
-        self.logger.debug(f"Planning path to: x={x}, y={y}, theta={theta}")
+        self.logger.info(
+            f"[NavSim] Planning path to: x={x}, y={y}, theta={theta}, frame={goal_pose.header.frame_id}, local_frame={local_frame}"
+        )
 
         # Get the global path from Nav2
+        self.logger.info(
+            f"[NavSim] Requesting path from Nav2 "
+            f"with goal_pose: pos=({goal_pose.pose.position.x:.2f}, {goal_pose.pose.position.y:.2f}), frame={goal_pose.header.frame_id}"
+        )
         path = self.navigator.getPath(goal_pose, goal_pose, use_start=False)
 
         if path is None:
-            self.logger.error("Failed to get path to goal")
+            self.logger.error("[NavSim] Failed to get path to goal")
             return "FAILED"
 
-        self.logger.info(f"Generated path with {len(path.poses)} waypoints")
+        self.logger.info(f"[NavSim] Generated path with {len(path.poses)} waypoints")
+        if path.poses:
+            first_pose = path.poses[0].pose.position
+            last_pose = path.poses[-1].pose.position
+            self.logger.info(
+                f"[NavSim] Path: first=({first_pose.x:.2f}, {first_pose.y:.2f}), last=({last_pose.x:.2f}, {last_pose.y:.2f}), frame={path.header.frame_id}"
+            )
 
         # Send the path and goal to the simulator
+        self._waiting_for_status = True  # Start accepting status messages
         self.path_publisher.publish(path)
 
-        self.logger.debug("Path sent to simulator")
+        self.logger.info(
+            "[NavSim] Path sent to simulator via /sim_navigation/global_plan"
+        )
 
         # Wait for simulator to complete navigation or handle cancellation
+        self.logger.info("[NavSim] Entering wait loop for navigation completion...")
+        loop_count = 0
         while not self._navigation_complete.is_set():
             if self._cancel_requested.is_set():
                 self.logger.info("Cancellation detected, sending cancel message")
@@ -113,8 +142,16 @@ class SimPathPlanningController:
 
             # Spin the node to process callbacks
             rclpy.spin_once(self.node, timeout_sec=0.1)
+            loop_count += 1
+            if loop_count % 50 == 0:  # Log every 5 seconds
+                self.logger.info(
+                    f"[NavSim] Still waiting... (loop {loop_count}, status={self._navigation_status})"
+                )
             time.sleep(0.1)
 
+        self.logger.info(
+            f"[NavSim] Wait loop exited with status: {self._navigation_status}"
+        )
         return self._navigation_status
 
     def cancel_navigation(self):
@@ -136,16 +173,17 @@ class NavigateToPositionSim(Skill):
         return (
             "Use when you need to navigate the robot to the specified position "
             "using provided x, y coordinates, and theta (yaw) angle IN RADIANS. "
-            "Can be used to navigate to a specific point in the map. "
+            "If local_frame is set to false, it navigates to a specific point in the map. "
+            "If local_frame is set to true, it navigates locally, where the robot is currently (0,0). "
             "This version uses Nav2 for path planning but sends the plan to the simulator for execution."
         )
 
-    def execute(self, x: float, y: float, theta: float):
+    def execute(self, x: float, y: float, theta: float, local_frame: bool = False):
         self.logger.info(
-            f"Planning and executing navigation to position: x={x}, y={y}, theta={theta}"
+            f"[NavSim] execute() called with: x={x}, y={y}, theta={theta} ({math.degrees(theta):.1f}°), local_frame={local_frame}"
         )
 
-        result = self.path_controller.go_to_position(x, y, theta)
+        result = self.path_controller.go_to_position(x, y, theta, local_frame)
 
         # Process result
         if result == "CANCELED":
@@ -153,7 +191,7 @@ class NavigateToPositionSim(Skill):
             return "Navigation canceled", SkillResult.CANCELLED
         elif result == "SUCCEEDED":
             self.logger.info(
-                f"Navigation complete. Arrived at position: x={x}, y={y}, theta={theta}"
+                f"Navigation complete. Arrived at position: x={x}, y={y}, theta={theta}, local_frame={local_frame}"
             )
             return f"Reached position ({x}, {y}, {theta})", SkillResult.SUCCESS
         else:

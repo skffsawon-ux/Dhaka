@@ -1,20 +1,6 @@
-# ============================================================================
-# DEPRECATED: This file is deprecated in favor of mode-specific files
-# ============================================================================
-#
-# For Docker builds, use:
-#   - apt-dependencies.common.txt (always installed)
-#   - apt-dependencies.hardware.txt (only for physical robots)
-#
-# For manual installations:
-#   - Simulation: xargs sudo apt-get install -y < apt-dependencies.common.txt
-#   - Hardware:   cat apt-dependencies.common.txt apt-dependencies.hardware.txt | \
-#                 grep -v '^#' | grep -v '^$' | xargs sudo apt-get install -y
-#
-# ============================================================================
-#
-# Legacy content kept for backwards compatibility - this installs common deps
-# with hardware-specific packages commented out:
+# Common system dependencies for innate-os ROS2 workspace
+# These are required for both simulation and hardware modes
+# Install with: xargs -a apt-dependencies.common.txt sudo apt-get install -y
 
 # Build tools
 python3-pip
@@ -122,7 +108,7 @@ ros-humble-moveit-ros-move-group
 # ROS2 Humble packages - Middleware/Bridge
 ros-humble-rosbridge-suite
 ros-humble-rosbridge-server
-ros-humble-innate-rws
+ros-humble-foxglove-bridge
 ros-humble-rosbag2
 ros-humble-rosidl-default-generators
 ros-humble-rosidl-default-runtime

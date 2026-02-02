@@ -366,17 +366,29 @@ else
         log "  Innate packages repository already configured"
     fi
     
-    APT_DEPS_FILE="$REPO_DIR/ros2_ws/apt-dependencies.txt"
-    if [ -f "$APT_DEPS_FILE" ]; then
-        # Add git-core PPA for latest git version (if not already added)
-        if ! grep -q "git-core/ppa" /etc/apt/sources.list.d/*.list 2>/dev/null; then
-            log "  Adding git-core PPA..."
-            add-apt-repository -y ppa:git-core/ppa
-        fi
-        log "  Installing apt dependencies..."
-        apt-get update
-        grep -v '^#' "$APT_DEPS_FILE" | grep -v '^$' | xargs apt-get -o DPkg::Lock::Timeout=45 install -y
-        log "  Apt dependencies installed"
+    APT_DEPS_COMMON="$REPO_DIR/ros2_ws/apt-dependencies.common.txt"
+    APT_DEPS_HARDWARE="$REPO_DIR/ros2_ws/apt-dependencies.hardware.txt"
+
+    # Add git-core PPA for latest git version (if not already added)
+    if ! grep -q "git-core/ppa" /etc/apt/sources.list.d/*.list 2>/dev/null; then
+        log "  Adding git-core PPA..."
+        add-apt-repository -y ppa:git-core/ppa
+    fi
+
+    apt-get update
+
+    # Install common dependencies (required for both simulation and hardware)
+    if [ -f "$APT_DEPS_COMMON" ]; then
+        log "  Installing common apt dependencies..."
+        grep -v '^#' "$APT_DEPS_COMMON" | grep -v '^$' | xargs apt-get -o DPkg::Lock::Timeout=45 install -y
+        log "  Common apt dependencies installed"
+    fi
+
+    # Install hardware-specific dependencies (Jetson only)
+    if [ -f "$APT_DEPS_HARDWARE" ]; then
+        log "  Installing hardware-specific apt dependencies..."
+        grep -v '^#' "$APT_DEPS_HARDWARE" | grep -v '^$' | xargs apt-get -o DPkg::Lock::Timeout=45 install -y
+        log "  Hardware apt dependencies installed"
     fi
 
     # Pip dependencies
