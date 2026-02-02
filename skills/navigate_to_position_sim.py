@@ -19,10 +19,8 @@ class SimPathPlanningController:
         self.logger = logger
         self._send_feedback = primitive._send_feedback
 
-        # Create Nav2 navigators with namespaces (matching real navigate_to_position.py)
+        # Create Nav2 navigator (sim uses default namespace - single planner)
         self.navigator = BasicNavigator(namespace="")
-        self.navigator_mapfree = BasicNavigator(namespace="mapfree")
-        self.navigator_navigation = BasicNavigator(namespace="navigation")
 
         # Create a minimal ROS2 node for publishing
         if not rclpy.ok():
@@ -95,17 +93,12 @@ class SimPathPlanningController:
             f"[NavSim] Planning path to: x={x}, y={y}, theta={theta}, frame={goal_pose.header.frame_id}, local_frame={local_frame}"
         )
 
-        # Use the correct navigator based on local_frame (matching real navigate_to_position.py)
-        path_navigator = (
-            self.navigator_mapfree if local_frame else self.navigator_navigation
-        )
-
         # Get the global path from Nav2
         self.logger.info(
-            f"[NavSim] Requesting path from Nav2 (namespace={'mapfree' if local_frame else 'navigation'}) "
+            f"[NavSim] Requesting path from Nav2 "
             f"with goal_pose: pos=({goal_pose.pose.position.x:.2f}, {goal_pose.pose.position.y:.2f}), frame={goal_pose.header.frame_id}"
         )
-        path = path_navigator.getPath(goal_pose, goal_pose, use_start=False)
+        path = self.navigator.getPath(goal_pose, goal_pose, use_start=False)
 
         if path is None:
             self.logger.error("[NavSim] Failed to get path to goal")
