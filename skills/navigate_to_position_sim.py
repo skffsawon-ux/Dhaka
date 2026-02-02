@@ -8,6 +8,7 @@ from nav2_simple_commander.robot_navigator import BasicNavigator
 from brain_client.skill_types import Skill, SkillResult
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
 
 class SimPathPlanningController:
@@ -44,14 +45,21 @@ class SimPathPlanningController:
         self._navigation_status = "IDLE"  # IDLE, ACTIVE, SUCCEEDED, FAILED, CANCELED
         self._cancel_requested = threading.Event()
         self._navigation_complete = threading.Event()
+        self._waiting_for_status = False  # Only accept status after path is sent
 
         self.logger.info("Simulator path planning controller created")
 
     def _status_callback(self, msg):
         """Callback for navigation status updates from simulator"""
+        if not self._waiting_for_status:
+            self.logger.debug(
+                f"Ignoring status '{msg.data}' - not waiting for navigation"
+            )
+            return
         self._navigation_status = msg.data
         if self._navigation_status in ["SUCCEEDED", "FAILED", "CANCELED"]:
             self._navigation_complete.set()
+            self._waiting_for_status = False
         self.logger.info(f"Navigation status: {self._navigation_status}")
 
     def go_to_position(
@@ -113,6 +121,7 @@ class SimPathPlanningController:
             )
 
         # Send the path and goal to the simulator
+        self._waiting_for_status = True  # Start accepting status messages
         self.path_publisher.publish(path)
 
         self.logger.info(
@@ -120,6 +129,8 @@ class SimPathPlanningController:
         )
 
         # Wait for simulator to complete navigation or handle cancellation
+        self.logger.info("[NavSim] Entering wait loop for navigation completion...")
+        loop_count = 0
         while not self._navigation_complete.is_set():
             if self._cancel_requested.is_set():
                 self.logger.info("Cancellation detected, sending cancel message")
@@ -131,8 +142,16 @@ class SimPathPlanningController:
 
             # Spin the node to process callbacks
             rclpy.spin_once(self.node, timeout_sec=0.1)
+            loop_count += 1
+            if loop_count % 50 == 0:  # Log every 5 seconds
+                self.logger.info(
+                    f"[NavSim] Still waiting... (loop {loop_count}, status={self._navigation_status})"
+                )
             time.sleep(0.1)
 
+        self.logger.info(
+            f"[NavSim] Wait loop exited with status: {self._navigation_status}"
+        )
         return self._navigation_status
 
     def cancel_navigation(self):
