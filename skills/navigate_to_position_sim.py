@@ -47,7 +47,7 @@ class SimPathPlanningController:
         self._navigation_complete = threading.Event()
         self._waiting_for_status = False  # Only accept status after path is sent
 
-        self.logger.info("Simulator path planning controller created")
+        self.logger.debug("Simulator path planning controller created")
 
     def _status_callback(self, msg):
         """Callback for navigation status updates from simulator"""
@@ -60,7 +60,7 @@ class SimPathPlanningController:
         if self._navigation_status in ["SUCCEEDED", "FAILED", "CANCELED"]:
             self._navigation_complete.set()
             self._waiting_for_status = False
-        self.logger.info(f"Navigation status: {self._navigation_status}")
+        self.logger.debug(f"Navigation status: {self._navigation_status}")
 
     def go_to_position(
         self, x: float, y: float, theta: float, local_frame: bool = False
@@ -97,39 +97,28 @@ class SimPathPlanningController:
         goal_pose.pose.orientation.z = math.sin(theta / 2.0)
         goal_pose.pose.orientation.w = math.cos(theta / 2.0)
 
-        self.logger.info(
+        self.logger.debug(
             f"[NavSim] Planning path to: x={x}, y={y}, theta={theta}, frame={goal_pose.header.frame_id}, local_frame={local_frame}"
         )
 
         # Get the global path from Nav2
-        self.logger.info(
-            f"[NavSim] Requesting path from Nav2 "
-            f"with goal_pose: pos=({goal_pose.pose.position.x:.2f}, {goal_pose.pose.position.y:.2f}), frame={goal_pose.header.frame_id}"
-        )
         path = self.navigator.getPath(goal_pose, goal_pose, use_start=False)
 
         if path is None:
             self.logger.error("[NavSim] Failed to get path to goal")
             return "FAILED"
 
-        self.logger.info(f"[NavSim] Generated path with {len(path.poses)} waypoints")
-        if path.poses:
-            first_pose = path.poses[0].pose.position
-            last_pose = path.poses[-1].pose.position
-            self.logger.info(
-                f"[NavSim] Path: first=({first_pose.x:.2f}, {first_pose.y:.2f}), last=({last_pose.x:.2f}, {last_pose.y:.2f}), frame={path.header.frame_id}"
-            )
+        self.logger.debug(f"[NavSim] Generated path with {len(path.poses)} waypoints")
 
         # Send the path and goal to the simulator
         self._waiting_for_status = True  # Start accepting status messages
         self.path_publisher.publish(path)
 
-        self.logger.info(
+        self.logger.debug(
             "[NavSim] Path sent to simulator via /sim_navigation/global_plan"
         )
 
         # Wait for simulator to complete navigation or handle cancellation
-        self.logger.info("[NavSim] Entering wait loop for navigation completion...")
         loop_count = 0
         while not self._navigation_complete.is_set():
             if self._cancel_requested.is_set():
@@ -143,13 +132,9 @@ class SimPathPlanningController:
             # Spin the node to process callbacks
             rclpy.spin_once(self.node, timeout_sec=0.1)
             loop_count += 1
-            if loop_count % 50 == 0:  # Log every 5 seconds
-                self.logger.info(
-                    f"[NavSim] Still waiting... (loop {loop_count}, status={self._navigation_status})"
-                )
             time.sleep(0.1)
 
-        self.logger.info(
+        self.logger.debug(
             f"[NavSim] Wait loop exited with status: {self._navigation_status}"
         )
         return self._navigation_status
@@ -179,7 +164,7 @@ class NavigateToPositionSim(Skill):
         )
 
     def execute(self, x: float, y: float, theta: float, local_frame: bool = False):
-        self.logger.info(
+        self.logger.debug(
             f"[NavSim] execute() called with: x={x}, y={y}, theta={theta} ({math.degrees(theta):.1f}°), local_frame={local_frame}"
         )
 
@@ -187,15 +172,15 @@ class NavigateToPositionSim(Skill):
 
         # Process result
         if result == "CANCELED":
-            self.logger.info("Navigation was canceled")
+            self.logger.debug("Navigation was canceled")
             return "Navigation canceled", SkillResult.CANCELLED
         elif result == "SUCCEEDED":
-            self.logger.info(
+            self.logger.debug(
                 f"Navigation complete. Arrived at position: x={x}, y={y}, theta={theta}, local_frame={local_frame}"
             )
             return f"Reached position ({x}, {y}, {theta})", SkillResult.SUCCESS
         else:
-            self.logger.info(f"Navigation failed with result: {result}")
+            self.logger.debug(f"Navigation failed with result: {result}")
             return f"Navigation failed with result: {result}", SkillResult.FAILURE
 
     def cancel(self):

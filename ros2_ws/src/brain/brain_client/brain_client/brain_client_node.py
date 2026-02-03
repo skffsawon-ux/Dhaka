@@ -860,7 +860,6 @@ class BrainClientNode(Node):
 
     def chat_in_callback(self, msg: String):
         data = json.loads(msg.data)
-        self.get_logger().info(f"Received brain/chat_in: {data}")
         
         if not self.is_brain_active:
             self.get_logger().warn(
@@ -1384,9 +1383,8 @@ class BrainClientNode(Node):
             self._pending_next_task = None
 
             self.get_logger().info(
-                f"\033[92m[BrainClient] Next task: {payload.next_task}\033[0m"
+                f"\033[92m[BrainClient] Next task: {payload.next_task.type}\033[0m"
             )
-            self.get_logger().info(f"Primitive task type: {payload.next_task.type}")
 
             if payload.next_task.type in self.primitives_dict:
                 self._pause_gaze()  # Pause gaze during skill execution
