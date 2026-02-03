@@ -95,6 +95,43 @@ class ManipulationInterface:
             'frame_id': self._fk_pose.header.frame_id
         }
     
+    def get_current_orientation_rpy(self) -> Optional[dict]:
+        """
+        Get the current end-effector orientation as roll/pitch/yaw.
+        
+        Returns:
+            dict with keys: 'roll', 'pitch', 'yaw' (in radians)
+            or None if no pose is available
+        """
+        if self._fk_pose is None:
+            self.logger.warn("No FK pose available yet")
+            return None
+        
+        import math
+        pose = self._fk_pose.pose
+        x, y, z, w = pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w
+        
+        # Convert quaternion to roll, pitch, yaw
+        sinr_cosp = 2 * (w * x + y * z)
+        cosr_cosp = 1 - 2 * (x * x + y * y)
+        roll = math.atan2(sinr_cosp, cosr_cosp)
+        
+        sinp = 2 * (w * y - z * x)
+        if abs(sinp) >= 1:
+            pitch = math.copysign(math.pi / 2, sinp)
+        else:
+            pitch = math.asin(sinp)
+        
+        siny_cosp = 2 * (w * z + x * y)
+        cosy_cosp = 1 - 2 * (y * y + z * z)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+        
+        return {
+            'roll': roll,
+            'pitch': pitch,
+            'yaw': yaw
+        }
+    
     def solve_ik(self, x: float, y: float, z: float, 
                  roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0,
                  timeout: float = 2.0) -> Optional[List[float]]:

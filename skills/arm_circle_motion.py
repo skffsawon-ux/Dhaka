@@ -54,6 +54,15 @@ class ArmCircleMotion(Skill):
         if self.manipulation is None:
             return "Manipulation interface not available", SkillResult.FAILURE
         
+        # Get current orientation to maintain during circle motion
+        current_orientation = self.manipulation.get_current_orientation_rpy()
+        if current_orientation is None:
+            self.logger.warning("Could not get current orientation, using defaults")
+            roll, pitch, yaw = 0.0, 0.0, 0.0
+        else:
+            roll, pitch, yaw = current_orientation['roll'], current_orientation['pitch'], current_orientation['yaw']
+            self.logger.info(f"Current orientation: roll={math.degrees(roll):.1f}°, pitch={math.degrees(pitch):.1f}°, yaw={math.degrees(yaw):.1f}°")
+        
         total_points = num_loops * points_per_loop
         self.logger.info(
             f"Starting circular motion: center=({center_x}, {center_y}, {center_z}), "
@@ -67,7 +76,7 @@ class ArmCircleMotion(Skill):
         self.logger.info(f"Moving to start position: ({center_x}, {start_y}, {start_z})")
         success = self.manipulation.move_to_cartesian_pose(
             x=center_x, y=start_y, z=start_z,
-            roll=0.0, pitch=0.0, yaw=0.0,
+            roll=roll, pitch=pitch, yaw=yaw,
             duration=1.0
         )
         
