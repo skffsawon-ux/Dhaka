@@ -110,7 +110,7 @@ class TTSHandler:
         self._publish_tts_status("true")
 
         try:
-            self.logger.info(f"🗣️ Generating speech for: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            self.logger.debug(f"🗣️ Generating speech for: '{text[:50]}{'...' if len(text) > 50 else ''}'")
             
             # Set up voice configuration
             voice = voice_config or {
@@ -133,7 +133,7 @@ class TTSHandler:
             # If response is an iterator of chunks, stream directly into aplay.
             # Otherwise, fall back to the existing temp-file approach.
             if hasattr(response, '__iter__') and not isinstance(response, (bytes, bytearray)):
-                self.logger.info("🔊 Streaming TTS audio to aplay via stdin")
+                self.logger.debug("🔊 Streaming TTS audio to aplay via stdin")
                 player = subprocess.Popen(
                     ["aplay", "-"],
                     stdin=subprocess.PIPE,
@@ -163,7 +163,7 @@ class TTSHandler:
 
                     player.wait()
                     if player.returncode == 0:
-                        self.logger.info("✅ Speech playback completed successfully (streaming)")
+                        self.logger.debug("✅ Speech playback completed successfully (streaming)")
                         success = True
                     else:
                         self.logger.error(f"❌ Audio playback failed (streaming), return code {player.returncode}")
@@ -200,7 +200,7 @@ class TTSHandler:
                 )
                 
                 if result.returncode == 0:
-                    self.logger.info("✅ Speech playback completed successfully")
+                    self.logger.debug("✅ Speech playback completed successfully")
                     success = True
                 else:
                     self.logger.error(f"❌ Audio playback failed: {result.stderr}")
