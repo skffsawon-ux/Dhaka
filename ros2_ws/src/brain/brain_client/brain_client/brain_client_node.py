@@ -2073,7 +2073,6 @@ class BrainClientNode(Node):
         self.chat_out_pub.publish(out_msg)
 
         # Re-register primitives and directive with the server
-        # This will also re-trigger ready_for_image if server responds positively
         self.register_primitives_and_directive()
 
     def handle_reset_brain(self, request, response):
