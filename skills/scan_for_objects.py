@@ -2,11 +2,10 @@
 """
 Skill that rotates the robot 360 degrees while scanning for objects using Gemini.
 """
-import base64
 import math
 import json
 from pathlib import Path
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import google.generativeai as genai
 from brain_client.skill_types import Skill, SkillResult, RobotState, RobotStateType
 
@@ -50,10 +49,6 @@ class ScanForObjects(Skill):
         
         # Scan parameters
         self.num_snapshots = 8    # Number of images to capture during rotation
-        
-        # Debug output directory
-        self.debug_dir = Path(__file__).parent / "scan_debug"
-        self._snapshot_counter = 0
 
     @property
     def name(self):
@@ -81,54 +76,68 @@ class ScanForObjects(Skill):
             self.logger.error("[ScanForObjects] GEMINI_API_KEY not set")
             return "Gemini API key not configured", SkillResult.FAILURE
 
-        self.logger.info(
-            f"\033[96m[BrainClient] Starting 360° object scan"
-            f"{f' for {target_object}' if target_object else ''}\033[0m"
-        )
         self._send_feedback(f"Starting scan{f' for {target_object}' if target_object else ''}...")
 
         # Calculate rotation per step in radians
         rotation_per_snapshot = (2 * math.pi) / self.num_snapshots
 
+        # Phase 1: Capture all images while rotating
+        image_buffer = []  # List of (image_b64, direction_name, direction_deg)
+        
+        try:
+            for i in range(self.num_snapshots):
+                direction_deg = (i * 360 / self.num_snapshots) % 360
+                direction_name = self._direction_name(direction_deg)
+                
+                if self.image:
+                    image_buffer.append((self.image, direction_name, direction_deg))
+                
+                # Rotate to next position (skip rotation after last snapshot)
+                if i < self.num_snapshots - 1:
+                    self.mobility.rotate(rotation_per_snapshot)
+
+        except Exception as e:
+            self.logger.error(f"[ScanForObjects] Error during capture: {e}")
+            return f"Scan failed: {str(e)}", SkillResult.FAILURE
+
+        if not image_buffer:
+            return "No images captured during scan", SkillResult.FAILURE
+
+        # Phase 2: Send all images to Gemini in parallel
+        self._send_feedback(f"Analyzing {len(image_buffer)} images...")
+        
         all_detections = []
         target_found = False
         target_directions = []
 
         try:
-            for i in range(self.num_snapshots):
-                # Calculate approximate direction (0° = front, increases counter-clockwise)
-                direction_deg = (i * 360 / self.num_snapshots) % 360
-                direction_name = self._direction_name(direction_deg)
+            with ThreadPoolExecutor(max_workers=self.num_snapshots) as executor:
+                # Submit all detection tasks
+                future_to_direction = {
+                    executor.submit(self._detect_objects, img, target_object): (dir_name, dir_deg)
+                    for img, dir_name, dir_deg in image_buffer
+                }
                 
-                self.logger.info(f"[ScanForObjects] Snapshot {i+1}/{self.num_snapshots} at {direction_name}")
-                
-                # Check if we have an image
-                if not self.image:
-                    self.logger.warn(f"[ScanForObjects] No image available at snapshot {i+1}")
-                else:
-                    # Send to Gemini for detection
-                    detections = self._detect_objects(self.image, target_object)
-                    
-                    if detections:
-                        for det in detections:
-                            det['direction'] = direction_name
-                            det['direction_deg'] = direction_deg
-                            all_detections.append(det)
-                            
-                            # Check if target found
-                            if target_object and target_object.lower() in det['class'].lower():
-                                target_found = True
-                                target_directions.append(direction_name)
-                                self._send_feedback(f"Found {target_object} at {direction_name}!")
-                
-                # Rotate to next position (skip rotation after last snapshot)
-                if i < self.num_snapshots - 1:
-                    # Use mobility interface for precise blocking rotation
-                    self.mobility.rotate(rotation_per_snapshot)
+                # Collect results as they complete
+                for future in as_completed(future_to_direction):
+                    direction_name, direction_deg = future_to_direction[future]
+                    try:
+                        detections = future.result()
+                        if detections:
+                            for det in detections:
+                                det['direction'] = direction_name
+                                det['direction_deg'] = direction_deg
+                                all_detections.append(det)
+                                
+                                if target_object and target_object.lower() in det['class'].lower():
+                                    target_found = True
+                                    target_directions.append(direction_name)
+                    except Exception:
+                        pass  # Individual detection failures are silently ignored
 
         except Exception as e:
-            self.logger.error(f"[ScanForObjects] Error during scan: {e}")
-            return f"Scan failed: {str(e)}", SkillResult.FAILURE
+            self.logger.error(f"[ScanForObjects] Error during detection: {e}")
+            return f"Detection failed: {str(e)}", SkillResult.FAILURE
 
         # Summarize results
         if target_object:
@@ -164,20 +173,6 @@ class ScanForObjects(Skill):
 
     def _detect_objects(self, image_b64: str, target_object: str = None) -> list:
         """Send image to Gemini and return detected objects."""
-        self._snapshot_counter += 1
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Debug: save image
-        self.debug_dir.mkdir(exist_ok=True)
-        try:
-            image_bytes = base64.b64decode(image_b64)
-            image_path = self.debug_dir / f"snapshot_{self._snapshot_counter:02d}_{timestamp}.jpg"
-            with open(image_path, "wb") as f:
-                f.write(image_bytes)
-            self.logger.info(f"[ScanForObjects] Saved image to {image_path}")
-        except Exception as e:
-            self.logger.warn(f"[ScanForObjects] Failed to save image: {e}")
-        
         if not self.model:
             return []
         
@@ -222,13 +217,11 @@ Example: [{"class": "laptop", "confidence": 0.95, "position": "center"}, {"class
                 if not isinstance(detections, list):
                     detections = []
             except json.JSONDecodeError:
-                self.logger.warn(f"[ScanForObjects] Failed to parse JSON: {response_text}")
                 detections = []
             
             return detections
 
-        except Exception as e:
-            self.logger.error(f"[ScanForObjects] Detection error: {e}")
+        except Exception:
             return []
 
     def _direction_name(self, degrees: float) -> str:
@@ -255,6 +248,5 @@ Example: [{"class": "laptop", "confidence": 0.95, "position": "center"}, {"class
 
     def cancel(self):
         """Stop the rotation."""
-        self.logger.info("[ScanForObjects] Cancellation requested, stopping rotation")
         if self.mobility:
             self.mobility.send_cmd_vel(0.0, 0.0)
