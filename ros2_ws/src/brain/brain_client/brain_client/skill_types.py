@@ -1,10 +1,13 @@
 from abc import ABC, abstractmethod
 from enum import Enum
+from typing import Any
+
 import rclpy
-from rclpy.action import ActionClient
-from rclpy.node import Node
 from action_msgs.msg import GoalStatus
 from brain_messages.action import ExecuteBehavior
+from rclpy.action import ActionClient
+from rclpy.node import Node
+
 from brain_client.logging_config import UniversalLogger
 
 
@@ -29,15 +32,85 @@ class RobotStateType(Enum):
     LAST_HEAD_POSITION = "last_head_position"
 
 
+class InterfaceType(Enum):
+    """
+    Enum representing the types of interfaces a skill might require.
+    """
+
+    MANIPULATION = "manipulation"
+    MOBILITY = "mobility"
+    HEAD = "head"
+
+
+class RobotState:
+    """
+    Descriptor for declaring and accessing robot state in skills.
+
+    Usage:
+        class MySkill(Skill):
+            image = RobotState(RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64)
+            odom = RobotState(RobotStateType.LAST_ODOM)
+
+            def execute(self):
+                if self.image:  # Access state directly
+                    ...
+    """
+
+    def __init__(self, state_type: RobotStateType):
+        self.state_type = state_type
+        self._attr_name: str | None = None
+
+    def __set_name__(self, owner: type, name: str):
+        """Called when the descriptor is assigned to a class attribute."""
+        self._attr_name = f"_robot_state_{name}"
+
+    def __get__(self, obj: Any, objtype: type | None = None) -> Any:
+        """Get the current state value."""
+        if obj is None:
+            return self
+        return getattr(obj, self._attr_name, None)
+
+    def __set__(self, obj: Any, value: Any):
+        """Set the state value."""
+        setattr(obj, self._attr_name, value)
+
+
+class Interface:
+    """
+    Descriptor for declaring and accessing interfaces in skills.
+
+    Usage:
+        class MySkill(Skill):
+            mobility = Interface(InterfaceType.MOBILITY)
+            head = Interface(InterfaceType.HEAD)
+
+            def execute(self):
+                self.mobility.rotate(0.5)  # Use interface directly
+    """
+
+    def __init__(self, interface_type: InterfaceType):
+        self.interface_type = interface_type
+        self._attr_name: str | None = None
+
+    def __set_name__(self, owner: type, name: str):
+        """Called when the descriptor is assigned to a class attribute."""
+        self._attr_name = f"_interface_{name}"
+
+    def __get__(self, obj: Any, objtype: type | None = None) -> Any:
+        """Get the interface instance."""
+        if obj is None:
+            return self
+        return getattr(obj, self._attr_name, None)
+
+    def __set__(self, obj: Any, value: Any):
+        """Set the interface instance."""
+        setattr(obj, self._attr_name, value)
+
+
 class Skill(ABC):
     def __init__(self, logger):
         self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
         self.node: Node | None = None
-        self.manipulation = (
-            None  # Will be injected by primitive_execution_action_server
-        )
-        self.mobility = None  # Will be injected by primitive_execution_action_server
-        self.head = None  # Will be injected by primitive_execution_action_server
         self._feedback_callback = None
 
     @property
@@ -76,18 +149,54 @@ class Skill(ABC):
     def update_robot_state(self, **kwargs):
         """
         Update the primitive with the latest robot state.
-        Subclasses can override this to store relevant data.
-        Example: self.last_image = kwargs.get('last_image_b64')
+        Automatically populates RobotState descriptors defined on the class.
+        Subclasses can override this to add custom handling.
         """
-        pass
+        # Auto-populate RobotState descriptors
+        for name, descriptor in self._get_robot_state_descriptors().items():
+            state_key = descriptor.state_type.value
+            if state_key in kwargs:
+                setattr(self, name, kwargs[state_key])
 
     def get_required_robot_states(self) -> list[RobotStateType]:
         """
         Declare the robot states required by this primitive.
-        Subclasses should override this to specify their needs.
-        Returns a list of RobotStateType enum members.
+        Automatically collects from RobotState descriptors defined on the class.
         """
-        return []
+        return [desc.state_type for desc in self._get_robot_state_descriptors().values()]
+
+    def _get_robot_state_descriptors(self) -> dict[str, "RobotState"]:
+        """Collect all RobotState descriptors from the class."""
+        descriptors = {}
+        for cls in type(self).__mro__:
+            for name, attr in vars(cls).items():
+                if isinstance(attr, RobotState) and name not in descriptors:
+                    descriptors[name] = attr
+        return descriptors
+
+    def get_required_interfaces(self) -> list[InterfaceType]:
+        """
+        Declare the interfaces required by this skill.
+        Automatically collects from Interface descriptors defined on the class.
+        """
+        return [desc.interface_type for desc in self._get_interface_descriptors().values()]
+
+    def _get_interface_descriptors(self) -> dict[str, "Interface"]:
+        """Collect all Interface descriptors from the class."""
+        descriptors = {}
+        for cls in type(self).__mro__:
+            for name, attr in vars(cls).items():
+                if isinstance(attr, Interface) and name not in descriptors:
+                    descriptors[name] = attr
+        return descriptors
+
+    def inject_interface(self, interface_type: InterfaceType, interface_instance):
+        """Inject an interface instance into the skill."""
+        for name, descriptor in self._get_interface_descriptors().items():
+            if descriptor.interface_type == interface_type:
+                setattr(self, name, interface_instance)
+                return True
+        return False
 
     def guidelines(self):
         """
@@ -114,9 +223,7 @@ class Skill(ABC):
             try:
                 self._feedback_callback(message)
             except Exception as e:
-                self.logger.error(
-                    f"Error sending feedback for primitive {self.name}: {e}"
-                )
+                self.logger.error(f"Error sending feedback for primitive {self.name}: {e}")
 
 
 class PhysicalSkill(Skill):
@@ -161,19 +268,13 @@ class PhysicalSkill(Skill):
                    PrimitiveResult enum value
         """
         if not self.node:
-            self.logger.error(
-                f"{self.display_name} primitive is not functional due to missing ROS node."
-            )
+            self.logger.error(f"{self.display_name} primitive is not functional due to missing ROS node.")
             return "Skill not initialized correctly (no ROS node)", SkillResult.FAILURE
 
         if not self._action_client:
-            self._action_client = ActionClient(
-                self.node, ExecuteBehavior, "/behavior/execute"
-            )
+            self._action_client = ActionClient(self.node, ExecuteBehavior, "/behavior/execute")
             if not self._action_client:
-                self.logger.error(
-                    f"{self.display_name} primitive could not create ExecuteBehavior action client."
-                )
+                self.logger.error(f"{self.display_name} primitive could not create ExecuteBehavior action client.")
                 return "Skill could not create action client", SkillResult.FAILURE
 
         self.logger.info(
@@ -188,9 +289,7 @@ class PhysicalSkill(Skill):
         goal_msg.behavior_name = self.behavior_name
 
         self.logger.info("Sending goal to ExecuteBehavior action server...")
-        goal_future = self._action_client.send_goal_async(
-            goal_msg, feedback_callback=self.feedback_callback
-        )
+        goal_future = self._action_client.send_goal_async(goal_msg, feedback_callback=self.feedback_callback)
 
         try:
             rclpy.spin_until_future_complete(self.node, goal_future, timeout_sec=10.0)
@@ -215,9 +314,7 @@ class PhysicalSkill(Skill):
         except Exception as e:
             self.logger.error(f"Exception while spinning for result future: {e}")
             if self._goal_handle:
-                self.logger.info(
-                    "Attempting to cancel goal due to exception during result wait."
-                )
+                self.logger.info("Attempting to cancel goal due to exception during result wait.")
                 self._goal_handle.cancel_goal_async()
             return f"Failed to get result: {e}", SkillResult.FAILURE
 
@@ -255,9 +352,7 @@ class PhysicalSkill(Skill):
             skill_status = SkillResult.CANCELLED
         else:
             self.logger.info(f"Goal failed with unknown status: {status}")
-            action_result_message = (
-                f"{self.display_name} failed with unknown status: {status}"
-            )
+            action_result_message = f"{self.display_name} failed with unknown status: {status}"
 
         self._goal_handle = None
         return action_result_message, skill_status
@@ -268,9 +363,7 @@ class PhysicalSkill(Skill):
         This is a best-effort cancellation.
         """
         if self._goal_handle:
-            self.logger.info(
-                f"\033[91m[BrainClient] Canceling {self.display_name.lower()} operation \033[0m"
-            )
+            self.logger.info(f"\033[91m[BrainClient] Canceling {self.display_name.lower()} operation \033[0m")
             self._goal_handle.cancel_goal_async()
             return f"\033[92m[BrainClient] Cancellation request sent for {self.display_name.lower()}. \033[0m"
         else:
