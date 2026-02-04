@@ -2,10 +2,11 @@
 """
 Skill that rotates the robot 360 degrees while scanning for objects using Gemini.
 """
-import time
+import base64
+import math
 import json
-import rclpy
 from pathlib import Path
+from datetime import datetime
 import google.generativeai as genai
 from brain_client.skill_types import Skill, SkillResult, RobotState, RobotStateType
 
@@ -48,8 +49,11 @@ class ScanForObjects(Skill):
             self.logger.warn(f"[ScanForObjects] GEMINI_API_KEY not set in {env_path}")
         
         # Scan parameters
-        self.rotation_speed = 1.0  # rad/s (positive = counter-clockwise)
         self.num_snapshots = 8    # Number of images to capture during rotation
+        
+        # Debug output directory
+        self.debug_dir = Path(__file__).parent / "scan_debug"
+        self._snapshot_counter = 0
 
     @property
     def name(self):
@@ -77,20 +81,14 @@ class ScanForObjects(Skill):
             self.logger.error("[ScanForObjects] GEMINI_API_KEY not set")
             return "Gemini API key not configured", SkillResult.FAILURE
 
-        if not self.mobility:
-            self.logger.error("[ScanForObjects] Mobility interface not available")
-            return "Mobility interface not available", SkillResult.FAILURE
-
         self.logger.info(
             f"\033[96m[BrainClient] Starting 360° object scan"
             f"{f' for {target_object}' if target_object else ''}\033[0m"
         )
         self._send_feedback(f"Starting scan{f' for {target_object}' if target_object else ''}...")
 
-        # Calculate timing for each rotation step
-        rotation_per_snapshot = (2 * 3.14159) / self.num_snapshots  # radians per step
-        rotation_time_per_step = rotation_per_snapshot / abs(self.rotation_speed)
-        settle_time = 0.3  # Time to wait after stopping before capturing
+        # Calculate rotation per step in radians
+        rotation_per_snapshot = (2 * math.pi) / self.num_snapshots
 
         all_detections = []
         target_found = False
@@ -103,9 +101,6 @@ class ScanForObjects(Skill):
                 direction_name = self._direction_name(direction_deg)
                 
                 self.logger.info(f"[ScanForObjects] Snapshot {i+1}/{self.num_snapshots} at {direction_name}")
-                
-                # Wait for image to settle, spinning to allow state updates
-                self._spin_wait(settle_time)
                 
                 # Check if we have an image
                 if not self.image:
@@ -128,12 +123,8 @@ class ScanForObjects(Skill):
                 
                 # Rotate to next position (skip rotation after last snapshot)
                 if i < self.num_snapshots - 1:
-                    self.mobility.send_cmd_vel(0.0, self.rotation_speed)
-                    self._spin_wait(rotation_time_per_step)
-                    self.mobility.send_cmd_vel(0.0, 0.0)  # Stop
-
-            # Ensure stopped at end
-            self.mobility.send_cmd_vel(0.0, 0.0)
+                    # Use mobility interface for precise blocking rotation
+                    self.mobility.rotate(rotation_per_snapshot)
 
         except Exception as e:
             self.logger.error(f"[ScanForObjects] Error during scan: {e}")
@@ -171,17 +162,22 @@ class ScanForObjects(Skill):
             self._send_feedback(result)
             return result, SkillResult.SUCCESS
 
-    def _spin_wait(self, duration: float):
-        """Wait while spinning the node to allow state updates."""
-        end_time = time.time() + duration
-        while time.time() < end_time:
-            if self.node:
-                rclpy.spin_once(self.node, timeout_sec=0.02)
-            else:
-                time.sleep(0.02)
-
     def _detect_objects(self, image_b64: str, target_object: str = None) -> list:
         """Send image to Gemini and return detected objects."""
+        self._snapshot_counter += 1
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Debug: save image
+        self.debug_dir.mkdir(exist_ok=True)
+        try:
+            image_bytes = base64.b64decode(image_b64)
+            image_path = self.debug_dir / f"snapshot_{self._snapshot_counter:02d}_{timestamp}.jpg"
+            with open(image_path, "wb") as f:
+                f.write(image_bytes)
+            self.logger.info(f"[ScanForObjects] Saved image to {image_path}")
+        except Exception as e:
+            self.logger.warn(f"[ScanForObjects] Failed to save image: {e}")
+        
         if not self.model:
             return []
         
@@ -261,4 +257,4 @@ Example: [{"class": "laptop", "confidence": 0.95, "position": "center"}, {"class
         """Stop the rotation."""
         self.logger.info("[ScanForObjects] Cancellation requested, stopping rotation")
         if self.mobility:
-            self.mobility.send_cmd_vel(0.0, 0.0)  # Stop immediately
+            self.mobility.send_cmd_vel(0.0, 0.0)

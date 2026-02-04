@@ -5,12 +5,17 @@ MobilityInterface - Provides base movement (wheels) control capabilities to prim
 This interface allows primitives to:
 1. Send velocity commands on the common cmd_vel topic
 2. Schedule automatic stop after a specified duration
+3. Precise blocking rotation via Nav2
 """
 
 from typing import Optional
 
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+from geometry_msgs.msg import PoseStamped
+import math
+
 from brain_client.logging_config import UniversalLogger
 
 
@@ -27,6 +32,10 @@ class MobilityInterface:
 
         self._cmd_vel_pub = self.node.create_publisher(Twist, self.cmd_vel_topic, 10)
         self._stop_timer: Optional[object] = None
+        
+        # Nav2 navigator for precise movements
+        self._navigator = BasicNavigator(namespace='')
+        self._navigator_mapfree = BasicNavigator(namespace='mapfree')
 
         self.logger.info(
             f"MobilityInterface initialized with cmd_vel topic: {self.cmd_vel_topic}"
@@ -86,10 +95,52 @@ class MobilityInterface:
             self._schedule_stop(duration)
 
     def rotate_in_place(self, angular_speed: float, duration: float) -> None:
-        """Rotate in place with specified angular speed for a duration.
+        """Rotate in place with specified angular speed for a duration (non-blocking).
 
         Args:
             angular_speed: Angular velocity in rad/s (sign determines direction).
             duration: Duration in seconds, after which a stop command is sent.
         """
         self.send_cmd_vel(linear_x=0.0, angular_z=angular_speed, duration=duration)
+
+    def rotate(self, angle_radians: float) -> bool:
+        """Rotate in place by a specific angle using Nav2 (blocking).
+
+        Args:
+            angle_radians: Angle to rotate in radians (positive = counter-clockwise).
+
+        Returns:
+            bool: True if rotation succeeded, False otherwise.
+        """
+        goal_pose = PoseStamped()
+        goal_pose.header.frame_id = "base_link"
+        goal_pose.header.stamp = self._navigator.get_clock().now().to_msg()
+        goal_pose.pose.position.x = 0.0
+        goal_pose.pose.position.y = 0.0
+        goal_pose.pose.position.z = 0.0
+        goal_pose.pose.orientation.x = 0.0
+        goal_pose.pose.orientation.y = 0.0
+        goal_pose.pose.orientation.z = math.sin(angle_radians / 2.0)
+        goal_pose.pose.orientation.w = math.cos(angle_radians / 2.0)
+
+        self.logger.info(f"MobilityInterface: rotating {math.degrees(angle_radians):.1f}° via Nav2")
+        
+        # Get path to verify it's possible
+        path = self._navigator_mapfree.getPath(goal_pose, goal_pose, use_start=False)
+        if path is None:
+            self.logger.error("MobilityInterface: failed to get rotation path")
+            return False
+
+        # Execute rotation (blocking)
+        self._navigator.goToPose(goal_pose, behavior_tree='mapfree')
+        
+        while not self._navigator.isTaskComplete():
+            pass  # Block until done
+        
+        result = self._navigator.getResult()
+        if result == TaskResult.SUCCEEDED:
+            self.logger.info("MobilityInterface: rotation complete")
+            return True
+        else:
+            self.logger.error(f"MobilityInterface: rotation failed with {result}")
+            return False

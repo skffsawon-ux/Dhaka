@@ -57,7 +57,8 @@ class PrimitiveExecutionActionServer(Node):
         # Track currently executing primitive for continuous state updates
         self._current_primitive = None
         self._current_primitive_lock = threading.Lock()
-        self._state_update_timer = None
+        self._state_update_thread = None
+        self._state_update_stop_event = threading.Event()
 
         image_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -642,14 +643,17 @@ class PrimitiveExecutionActionServer(Node):
         if robot_state_to_inject:  # Only call if there is state to update
             primitive.update_robot_state(**robot_state_to_inject)
 
-    def _continuous_state_update_callback(self):
-        """Timer callback to continuously update robot state for running primitive."""
-        with self._current_primitive_lock:
-            if self._current_primitive is not None:
-                try:
-                    self._update_primitive_robot_state(self._current_primitive)
-                except Exception as e:
-                    self.get_logger().error(f"Error in continuous state update: {e}")
+    def _state_update_thread_func(self):
+        """Background thread that continuously updates robot state for running primitive."""
+        while not self._state_update_stop_event.is_set():
+            with self._current_primitive_lock:
+                if self._current_primitive is not None:
+                    try:
+                        self._update_primitive_robot_state(self._current_primitive)
+                    except Exception as e:
+                        self.get_logger().error(f"Error in continuous state update: {e}")
+            # Sleep for ~50Hz updates (20ms)
+            self._state_update_stop_event.wait(0.02)
 
     def _execute_code_primitive(self, goal_handle, primitive_type, inputs):
         primitive = self._code_primitives[primitive_type]
@@ -675,21 +679,24 @@ class PrimitiveExecutionActionServer(Node):
             if required_states:
                 with self._current_primitive_lock:
                     self._current_primitive = primitive
-                # Create timer for 10Hz updates (100ms)
-                self._state_update_timer = self.create_timer(
-                    0.02, self._continuous_state_update_callback
+                # Start background thread for state updates (runs independently of executor)
+                self._state_update_stop_event.clear()
+                self._state_update_thread = threading.Thread(
+                    target=self._state_update_thread_func, daemon=True
                 )
+                self._state_update_thread.start()
                 self.get_logger().info(
-                    f"Started continuous state updates for '{primitive_type}' at 10Hz"
+                    f"Started continuous state updates for '{primitive_type}' at 50Hz"
                 )
 
             # Execute the primitive with its direct inputs
             result_message, result_status = primitive.execute(**inputs)
 
             # Stop continuous state updates
-            if self._state_update_timer is not None:
-                self._state_update_timer.cancel()
-                self._state_update_timer = None
+            if self._state_update_thread is not None:
+                self._state_update_stop_event.set()
+                self._state_update_thread.join(timeout=1.0)
+                self._state_update_thread = None
             with self._current_primitive_lock:
                 self._current_primitive = None
 
