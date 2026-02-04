@@ -14,14 +14,20 @@ TaskManager::TaskManager(const std::string& base_data_directory)
 
 void TaskManager::start_new_task(const std::string& task_name, double data_frequency,
                                   const std::string& primitive_type) {
+    // Use default base_data_directory when no explicit directory is provided
+    start_new_task_at_directory(task_name, base_data_directory_ + "/" + task_name, data_frequency, primitive_type);
+}
+
+void TaskManager::start_new_task_at_directory(const std::string& task_name, const std::string& task_directory,
+                                               double data_frequency, const std::string& primitive_type) {
     current_task_name_ = task_name;
-    current_task_dir_ = base_data_directory_ + "/" + task_name;
+    current_task_dir_ = task_directory;
     std::string data_dir = current_task_dir_ + "/data";
     std::string dataset_metadata_path = data_dir + "/dataset_metadata.json";
 
     if (fs::exists(dataset_metadata_path)) {
         std::cout << "Dataset for '" << task_name << "' already exists. Resuming." << std::endl;
-        resume_task(task_name);
+        resume_task_at_directory(task_name, task_directory);
         return;
     }
 
@@ -41,8 +47,13 @@ void TaskManager::start_new_task(const std::string& task_name, double data_frequ
 }
 
 void TaskManager::resume_task(const std::string& task_name) {
+    // Use default base_data_directory when no explicit directory is provided
+    resume_task_at_directory(task_name, base_data_directory_ + "/" + task_name);
+}
+
+void TaskManager::resume_task_at_directory(const std::string& task_name, const std::string& task_directory) {
     current_task_name_ = task_name;
-    current_task_dir_ = base_data_directory_ + "/" + task_name;
+    current_task_dir_ = task_directory;
     std::string metadata_path = current_task_dir_ + "/data/dataset_metadata.json";
     
     if (!fs::exists(metadata_path)) {
