@@ -8,13 +8,11 @@ This interface allows primitives to:
 3. Precise blocking rotation via Nav2
 """
 
-from typing import Optional
-
-from rclpy.node import Node
-from geometry_msgs.msg import Twist
-from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
-from geometry_msgs.msg import PoseStamped
 import math
+
+from geometry_msgs.msg import PoseStamped, Twist
+from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+from rclpy.node import Node
 
 from brain_client.logging_config import UniversalLogger
 
@@ -31,15 +29,13 @@ class MobilityInterface:
         self.cmd_vel_topic = cmd_vel_topic
 
         self._cmd_vel_pub = self.node.create_publisher(Twist, self.cmd_vel_topic, 10)
-        self._stop_timer: Optional[object] = None
-        
-        # Nav2 navigator for precise movements
-        self._navigator = BasicNavigator(namespace='')
-        self._navigator_mapfree = BasicNavigator(namespace='mapfree')
+        self._stop_timer: object | None = None
 
-        self.logger.info(
-            f"MobilityInterface initialized with cmd_vel topic: {self.cmd_vel_topic}"
-        )
+        # Nav2 navigator for precise movements
+        self._navigator = BasicNavigator(namespace="")
+        self._navigator_mapfree = BasicNavigator(namespace="mapfree")
+
+        self.logger.info(f"MobilityInterface initialized with cmd_vel topic: {self.cmd_vel_topic}")
 
     def _schedule_stop(self, duration: float):
         if duration is None or duration <= 0.0:
@@ -72,7 +68,7 @@ class MobilityInterface:
         self,
         linear_x: float = 0.0,
         angular_z: float = 0.0,
-        duration: Optional[float] = None,
+        duration: float | None = None,
     ) -> None:
         """Publish a Twist on the cmd_vel topic.
 
@@ -124,7 +120,7 @@ class MobilityInterface:
         goal_pose.pose.orientation.w = math.cos(angle_radians / 2.0)
 
         self.logger.info(f"MobilityInterface: rotating {math.degrees(angle_radians):.1f}° via Nav2")
-        
+
         # Get path to verify it's possible
         path = self._navigator_mapfree.getPath(goal_pose, goal_pose, use_start=False)
         if path is None:
@@ -132,11 +128,11 @@ class MobilityInterface:
             return False
 
         # Execute rotation (blocking)
-        self._navigator.goToPose(goal_pose, behavior_tree='mapfree')
-        
+        self._navigator.goToPose(goal_pose, behavior_tree="mapfree")
+
         while not self._navigator.isTaskComplete():
             pass  # Block until done
-        
+
         result = self._navigator.getResult()
         if result == TaskResult.SUCCEEDED:
             self.logger.info("MobilityInterface: rotation complete")
