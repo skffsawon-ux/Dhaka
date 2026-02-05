@@ -2,17 +2,20 @@
 """
 KDL-based IK node loading URDF directly from maurice_sim and using the package-local URDF→KDL parser (urdf.py).
 """
-import os
+
 import math
+import os
+import time
+
+import PyKDL as kdl
 import rclpy
+from ament_index_python.packages import get_package_share_directory
+from geometry_msgs.msg import PoseStamped, Twist
 from rclpy.node import Node
-from geometry_msgs.msg import Twist, PoseStamped
 from sensor_msgs.msg import JointState
 from urdf_parser_py.urdf import URDF
+
 from maurice_arm.urdf import treeFromUrdfModel  # local parser in urdf.py
-import PyKDL as kdl
-from ament_index_python.packages import get_package_share_directory
-import time
 
 
 class KDLIKNode(Node):
@@ -78,19 +81,11 @@ class KDLIKNode(Node):
         if fk_result >= 0:
             pos = self.initial_frame.p
             rot = self.initial_frame.M.GetRPY()
-            self.get_logger().info(
-                f"Initial FK pose (ee_link relative to base_link):"
-            )  # Updated message
-            self.get_logger().info(
-                f"  Position (x,y,z): ({pos.x():.4f}, {pos.y():.4f}, {pos.z():.4f})"
-            )
-            self.get_logger().info(
-                f"  Orientation (r,p,y): ({rot[0]:.4f}, {rot[1]:.4f}, {rot[2]:.4f})"
-            )
+            self.get_logger().info("Initial FK pose (ee_link relative to base_link):")  # Updated message
+            self.get_logger().info(f"  Position (x,y,z): ({pos.x():.4f}, {pos.y():.4f}, {pos.z():.4f})")
+            self.get_logger().info(f"  Orientation (r,p,y): ({rot[0]:.4f}, {rot[1]:.4f}, {rot[2]:.4f})")
         else:
-            self.get_logger().warn(
-                f"Initial FK calculation failed with code: {fk_result}"
-            )
+            self.get_logger().warn(f"Initial FK calculation failed with code: {fk_result}")
             # Handle error appropriately, maybe raise exception or set a flag
             self.initial_frame = None
 
@@ -99,9 +94,7 @@ class KDLIKNode(Node):
         self.fk_pub = self.create_publisher(PoseStamped, "/fk_pose", 10)
         # self.command_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
         self.create_subscription(Twist, "/ik_delta", self.on_delta, 10)
-        self.create_subscription(
-            JointState, "/mars/arm/state", self.on_joint_states, 10
-        )
+        self.create_subscription(JointState, "/mars/arm/state", self.on_joint_states, 10)
 
         # Timer for FK publishing at 10Hz
         self.create_timer(0.1, self.publish_fk)  # 0.1 seconds = 10Hz
@@ -164,9 +157,7 @@ class KDLIKNode(Node):
         target_frame.p.z(delta.linear.z)
 
         # Set orientation from RPY values
-        target_frame.M = kdl.Rotation.RPY(
-            delta.angular.x, delta.angular.y, delta.angular.z
-        )
+        target_frame.M = kdl.Rotation.RPY(delta.angular.x, delta.angular.y, delta.angular.z)
 
         # Log the target frame before IK
         target_pos = target_frame.p
@@ -187,21 +178,15 @@ class KDLIKNode(Node):
         # Check the ik_result based on observed behavior and KDL definitions
         if ik_result >= 0:
             # Successful convergence (ik_result == SolverI.NoError, which is 0)
-            self.get_logger().info(
-                f"KDL IK solved successfully (took {solve_time_ms:.2f} ms)"
-            )
-        elif (
-            ik_result == -100
-        ):  # KDL::ChainIkSolver Pos_LMA::E_GRADIENT_JOINTS_TOO_SMALL
+            self.get_logger().info(f"KDL IK solved successfully (took {solve_time_ms:.2f} ms)")
+        elif ik_result == -100:  # KDL::ChainIkSolver Pos_LMA::E_GRADIENT_JOINTS_TOO_SMALL
             # Gradient too small (local minimum / flat region) - accept result
             self.get_logger().warn(
                 f"KDL IK gradient too small (solver returned {ik_result}), using approximate result. "
                 f"(Took {solve_time_ms:.2f} ms)"
             )
             # Proceed with the potentially approximate result in q_out
-        elif (
-            ik_result == -101
-        ):  # KDL::ChainIkSolverPos_LMA::E_INCREMENT_JOINTS_TOO_SMALL
+        elif ik_result == -101:  # KDL::ChainIkSolverPos_LMA::E_INCREMENT_JOINTS_TOO_SMALL
             # Joint increments too small - accept result
             self.get_logger().warn(
                 f"KDL IK joint increments too small (solver returned {ik_result}), using approximate result. "
@@ -210,9 +195,7 @@ class KDLIKNode(Node):
             # Proceed with the potentially approximate result in q_out
         else:
             # Treat ALL other negative results (including max iterations exceeded) as unrecoverable errors
-            self.get_logger().error(
-                f"KDL IK failed with error code {ik_result} (took {solve_time_ms:.2f} ms)"
-            )
+            self.get_logger().error(f"KDL IK failed with error code {ik_result} (took {solve_time_ms:.2f} ms)")
             return  # Do not proceed
 
         # Normalize joint angles to [-pi, pi]
