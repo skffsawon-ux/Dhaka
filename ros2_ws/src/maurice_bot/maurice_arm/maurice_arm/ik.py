@@ -152,6 +152,39 @@ class KDLIKNode(Node):
 
             self.fk_pub.publish(pose_msg)
 
+    def _try_ik_with_seed(self, seed: kdl.JntArray, target_frame: kdl.Frame):
+        """Try IK from a given seed. Returns (success, q_out, score) or (False, None, inf).
+        Score is the Cartesian error (position + orientation distance from target).
+        """
+        q_out = kdl.JntArray(self.chain.getNrOfJoints())
+        ik_result = self.ik_solver.CartToJnt(seed, target_frame, q_out)
+
+        # Accept successful results and "close enough" warnings
+        if ik_result >= 0 or ik_result in (-100, -101):
+            # Compute FK on solution to measure actual Cartesian error
+            fk_frame = kdl.Frame()
+            self.fksolver.JntToCart(q_out, fk_frame)
+
+            # Position error (Euclidean distance)
+            pos_err = (target_frame.p - fk_frame.p).Norm()
+
+            # Orientation error (angle between rotations)
+            rot_diff = target_frame.M.Inverse() * fk_frame.M
+            angle_err = rot_diff.GetRotAngle()[0]  # returns (angle, axis)
+
+            # Combined score (weight orientation error, since it's in radians)
+            score = pos_err + 0.1 * abs(angle_err)
+            return True, q_out, score
+        return False, None, float("inf")
+
+    def _normalize_angle(self, angle):
+        """Normalize angle to [-pi, pi]."""
+        while angle > math.pi:
+            angle -= 2 * math.pi
+        while angle < -math.pi:
+            angle += 2 * math.pi
+        return angle
+
     def on_delta(self, delta: Twist):
         """Handle absolute target pose (sent via Twist message for compatibility)"""
         # Create target frame from absolute pose values
@@ -173,50 +206,40 @@ class KDLIKNode(Node):
             f"RPY: ({target_rot[0]:.4f}, {target_rot[1]:.4f}, {target_rot[2]:.4f})"
         )
 
-        # solve IK - seed with current_q, target target_frame
-        q_out = kdl.JntArray(self.chain.getNrOfJoints())
-        start_time = time.perf_counter()  # Start timer
-        # Use self.current_q as the initial guess (seed)
-        ik_result = self.ik_solver.CartToJnt(self.current_q, target_frame, q_out)
-        end_time = time.perf_counter()  # End timer
-        solve_time_ms = (end_time - start_time) * 1000  # Calculate duration in ms
+        # Multi-start IK: try from current position and from zeros, pick best
+        start_time = time.perf_counter()
 
-        # Check the ik_result based on observed behavior and KDL definitions
-        if ik_result >= 0:
-            # Successful convergence (ik_result == SolverI.NoError, which is 0)
-            self.get_logger().info(f"KDL IK solved successfully (took {solve_time_ms:.2f} ms)")
-        elif ik_result == -100:  # KDL::ChainIkSolver Pos_LMA::E_GRADIENT_JOINTS_TOO_SMALL
-            # Gradient too small (local minimum / flat region) - accept result
-            self.get_logger().warn(
-                f"KDL IK gradient too small (solver returned {ik_result}), using approximate result. "
-                f"(Took {solve_time_ms:.2f} ms)"
-            )
-            # Proceed with the potentially approximate result in q_out
-        elif ik_result == -101:  # KDL::ChainIkSolverPos_LMA::E_INCREMENT_JOINTS_TOO_SMALL
-            # Joint increments too small - accept result
-            self.get_logger().warn(
-                f"KDL IK joint increments too small (solver returned {ik_result}), using approximate result. "
-                f"(Took {solve_time_ms:.2f} ms)"
-            )
-            # Proceed with the potentially approximate result in q_out
-        else:
-            # Treat ALL other negative results (including max iterations exceeded) as unrecoverable errors
-            self.get_logger().error(f"KDL IK failed with error code {ik_result} (took {solve_time_ms:.2f} ms)")
-            return  # Do not proceed
+        seeds = [
+            ("current", self.current_q),
+            ("zeros", kdl.JntArray(self.chain.getNrOfJoints())),  # initialized to zeros
+        ]
 
-        # Normalize joint angles to [-pi, pi]
-        def normalize_angle(angle):
-            while angle > math.pi:
-                angle -= 2 * math.pi
-            while angle < -math.pi:
-                angle += 2 * math.pi
-            return angle
+        best_solution = None
+        best_score = float("inf")
+        best_seed_name = None
+
+        for seed_name, seed in seeds:
+            success, q_out, score = self._try_ik_with_seed(seed, target_frame)
+            if success and score < best_score:
+                best_solution = q_out
+                best_score = score
+                best_seed_name = seed_name
+
+        solve_time_ms = (time.perf_counter() - start_time) * 1000
+
+        if best_solution is None:
+            self.get_logger().error(f"KDL IK failed from all seeds (took {solve_time_ms:.2f} ms)")
+            return
+
+        self.get_logger().info(
+            f"KDL IK solved (seed={best_seed_name}, score={best_score:.4f}, took {solve_time_ms:.2f} ms)"
+        )
 
         # publish JointState
         js = JointState()
         js.header.stamp = self.get_clock().now().to_msg()
         js.name = self.joint_names
-        js.position = [normalize_angle(q_out[i]) for i in range(q_out.rows())]
+        js.position = [self._normalize_angle(best_solution[i]) for i in range(best_solution.rows())]
         self.joint_pub.publish(js)
 
         # Publish command for the arm - COMMENTED OUT
