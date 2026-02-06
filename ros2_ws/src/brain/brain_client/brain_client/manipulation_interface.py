@@ -16,6 +16,7 @@ from maurice_msgs.srv import GotoJS
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
+from std_srvs.srv import Trigger
 
 
 class ManipulationInterface:
@@ -52,6 +53,10 @@ class ManipulationInterface:
         # here, but deliberately avoid any blocking wait_for_service calls
         # to keep the executor responsive.
         self._goto_js_client = self.node.create_client(GotoJS, "/mars/arm/goto_js")
+
+        # Service clients for torque control
+        self._torque_on_client = self.node.create_client(Trigger, "/mars/arm/torque_on")
+        self._torque_off_client = self.node.create_client(Trigger, "/mars/arm/torque_off")
 
         self.logger.info("ManipulationInterface initialized")
 
@@ -283,3 +288,121 @@ class ManipulationInterface:
             "joint5": {"min": -1.57, "max": 1.57},
             "joint6": {"min": -1.57, "max": 1.57},
         }
+
+    def torque_on(self) -> bool:
+        """
+        Enable torque on all arm motors.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self._torque_on_client.service_is_ready():
+            self.logger.error("[ManipulationInterface] Torque on service not ready")
+            return False
+
+        try:
+            request = Trigger.Request()
+            future = self._torque_on_client.call_async(request)
+            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+            if future.result() is not None:
+                result = future.result()
+                if result.success:
+                    self.logger.info("Torque enabled on arm")
+                    return True
+                else:
+                    self.logger.error(f"Torque on failed: {result.message}")
+                    return False
+            else:
+                self.logger.error("Torque on service call timed out")
+                return False
+        except Exception as e:
+            self.logger.error(f"Exception calling torque_on: {e}")
+            return False
+
+    def torque_off(self) -> bool:
+        """
+        Disable torque on all arm motors (arm will be limp).
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self._torque_off_client.service_is_ready():
+            self.logger.error("[ManipulationInterface] Torque off service not ready")
+            return False
+
+        try:
+            request = Trigger.Request()
+            future = self._torque_off_client.call_async(request)
+            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+            if future.result() is not None:
+                result = future.result()
+                if result.success:
+                    self.logger.info("Torque disabled on arm")
+                    return True
+                else:
+                    self.logger.error(f"Torque off failed: {result.message}")
+                    return False
+            else:
+                self.logger.error("Torque off service call timed out")
+                return False
+        except Exception as e:
+            self.logger.error(f"Exception calling torque_off: {e}")
+            return False
+
+    def open_gripper(self, duration: float = 0.5) -> bool:
+        """
+        Open the gripper (joint6).
+
+        Args:
+            duration: Time for gripper motion
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # Get current joint positions
+        if self._arm_state is None:
+            self.logger.error("No arm state available")
+            return False
+
+        # Drain message queue to get fresh state
+        for _ in range(5):
+            rclpy.spin_once(self.node, timeout_sec=0.01)
+
+        positions = list(self._arm_state.position)
+        if len(positions) < 6:
+            positions.extend([0.0] * (6 - len(positions)))
+
+        # Set gripper to open position
+        # User says: 0 encoder = closed, 700 encoder = open
+        # With joint6 flip: to get encoder 700, send ~2.07 radians
+        positions[5] = 2.07
+        return self.move_to_joint_positions(positions, duration=duration, wait_for_completion=False)
+
+    def close_gripper(self, duration: float = 0.5) -> bool:
+        """
+        Close the gripper (joint6).
+
+        Args:
+            duration: Time for gripper motion
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # Get current joint positions
+        if self._arm_state is None:
+            self.logger.error("No arm state available")
+            return False
+
+        # Drain message queue to get fresh state
+        for _ in range(5):
+            rclpy.spin_once(self.node, timeout_sec=0.01)
+
+        positions = list(self._arm_state.position)
+        if len(positions) < 6:
+            positions.extend([0.0] * (6 - len(positions)))
+
+        # Set gripper to closed position
+        # User says: 0 encoder = closed, 700 encoder = open
+        # With joint6 flip: to get encoder 0, send ~3.14 radians (PI)
+        positions[5] = 3.14
+        return self.move_to_joint_positions(positions, duration=duration, wait_for_completion=False)
