@@ -57,6 +57,7 @@ from brain_messages.srv import GetAvailableDirectives
 from brain_messages.srv import ResetBrain
 from brain_messages.srv import SetDirectiveOnStartup
 from brain_messages.srv import GetAvailableSkills
+from brain_messages.srv import ReloadSkillsAgents
 from std_srvs.srv import SetBool, Trigger
 
 from brain_client.ws_bridge import WSBridge
@@ -459,9 +460,19 @@ class BrainClientNode(Node):
             GetAvailableSkills, "/brain/get_available_skills"
         )
 
+        # Service client for selective reload
+        self._reload_skills_agents_client = self._service_call_node.create_client(
+            ReloadSkillsAgents, "/brain/reload_skills_agents"
+        )
+
         # --- Service for reloading primitives and directives ---
         self._reload_srv = self.create_service(
             Trigger, "/brain/reload", self.handle_reload
+        )
+
+        # --- Service for selective reload of specific skills/agents ---
+        self._reload_skills_agents_srv = self.create_service(
+            ReloadSkillsAgents, "/brain/reload_skills_agents", self.handle_reload_skills_agents
         )
 
         # Initialize TTS handler with proxy (voice_id comes from proxy.config)
@@ -2343,6 +2354,166 @@ class BrainClientNode(Node):
             response.success = False
             response.message = f"Reload failed: {e}"
         return response
+
+    def handle_reload_skills_agents(self, request, response):
+        """
+        Service handler for selectively reloading specific skills and/or agents.
+        Only reloads the specified items, leaving others untouched.
+        """
+        skill_names = list(request.skills) if request.skills else []
+        agent_names = list(request.agents) if request.agents else []
+        
+        self.get_logger().info(
+            f"\033[1;92m[BrainClient] Selective reload: skills={skill_names}, agents={agent_names}\033[0m"
+        )
+
+        try:
+            reloaded_skills, reloaded_agents = self._perform_reload_selective(skill_names, agent_names)
+            response.success = True
+            response.reloaded_skills = reloaded_skills
+            response.reloaded_agents = reloaded_agents
+            response.message = f"Reloaded {len(reloaded_skills)} skills, {len(reloaded_agents)} agents"
+        except Exception as e:
+            response.success = False
+            response.message = f"Selective reload failed: {e}"
+            response.reloaded_skills = []
+            response.reloaded_agents = []
+        return response
+
+    def _perform_reload_selective(self, skill_names: list, agent_names: list) -> tuple:
+        """
+        Perform selective reload of specific skills and agents.
+        
+        Args:
+            skill_names: List of skill names to reload. Empty means skip skill reload.
+            agent_names: List of agent names to reload. Empty means skip agent reload.
+            
+        Returns:
+            Tuple of (reloaded_skills, reloaded_agents) lists.
+        """
+        reloaded_skills = []
+        reloaded_agents = []
+        
+        try:
+            # Deactivate brain: stops agent loop, cancels running primitive
+            self._deactivate_brain()
+        
+            # Reload specific skills via PEAS
+            if skill_names:
+                if self._reload_skills_agents_client.wait_for_service(timeout_sec=5.0):
+                    peas_request = ReloadSkillsAgents.Request()
+                    peas_request.skills = skill_names
+                    peas_request.agents = []  # PEAS doesn't handle agents
+                    
+                    future = self._reload_skills_agents_client.call_async(peas_request)
+                    rclpy.spin_until_future_complete(
+                        self._service_call_node, future, timeout_sec=15.0
+                    )
+                    
+                    if future.done():
+                        peas_result = future.result()
+                        if peas_result.success:
+                            reloaded_skills = list(peas_result.reloaded_skills)
+                            self.get_logger().info(f"PEAS selective reload: {peas_result.message}")
+                            
+                            # Update local primitives_dict with reloaded skills
+                            self._update_primitives_after_selective_reload(reloaded_skills)
+                        else:
+                            self.get_logger().warn(f"PEAS selective reload failed: {peas_result.message}")
+                    else:
+                        self.get_logger().warn("PEAS selective reload timed out")
+                else:
+                    self.get_logger().warn("PEAS selective reload service not available")
+            
+            # Reload specific agents locally
+            if agent_names:
+                reloaded_agents = self._reload_agents_selective(agent_names)
+            
+            # Re-register with server if anything was reloaded
+            if reloaded_skills or reloaded_agents:
+                self.register_primitives_and_directive()
+            
+            # Reactivate brain
+            self._reactivate_brain()
+            
+            self.get_logger().info(
+                f"\033[1;92m[BrainClient] Selective reload complete: "
+                f"{len(reloaded_skills)} skills, {len(reloaded_agents)} agents\033[0m"
+            )
+        except Exception as e:
+            self.get_logger().error(f"[BrainClient] Selective reload failed: {e}")
+            # Attempt to reactivate brain even on failure to avoid stuck state
+            try:
+                self._reactivate_brain()
+            except Exception:
+                pass
+            raise
+        
+        return reloaded_skills, reloaded_agents
+
+    def _update_primitives_after_selective_reload(self, reloaded_skill_names: list):
+        """Update local primitives_dict after skills were reloaded in PEAS."""
+        # Re-query the full list from PEAS to get updated metadata
+        updated_primitives = self._query_available_primitives()
+        
+        # Only update the primitives that were reloaded
+        for skill_name in reloaded_skill_names:
+            if skill_name in updated_primitives:
+                self.primitives_dict[skill_name] = updated_primitives[skill_name]
+                self.get_logger().debug(f"Updated primitive: {skill_name}")
+
+    def _reload_agents_selective(self, agent_names: list) -> list:
+        """
+        Reload specific agents by name.
+        
+        Args:
+            agent_names: List of agent names to reload.
+            
+        Returns:
+            List of agent names that were successfully reloaded.
+        """
+        from brain_client.agent_loader import AgentLoader
+        
+        agent_loader = AgentLoader(self.get_logger())
+        
+        # Get agent directories
+        innate_root = os.environ.get(
+            "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
+        )
+        agents_directories = [
+            os.path.join(innate_root, "agents"),
+            os.path.join(os.path.expanduser("~"), "agents"),
+        ]
+        
+        reloaded = []
+        for agent_name in agent_names:
+            agent_class = agent_loader.reload_agent_by_name(agent_name, agents_directories)
+            if agent_class is not None:
+                try:
+                    # Create instance and validate
+                    agent_instance = agent_class()
+                    
+                    # Load icon
+                    agent_loader._load_display_icon(agent_instance, agents_directories[0])
+                    
+                    # Validate skills
+                    if self.primitives_dict:
+                        agent_loader._validate_agent_skills(agent_instance, self.primitives_dict)
+                    
+                    # Update the directives dict
+                    self.directives[agent_name] = agent_instance
+                    reloaded.append(agent_name)
+                    
+                    # If this is the current directive, update it
+                    if self.current_directive and self.current_directive.id == agent_name:
+                        self.current_directive = agent_instance
+                        self.get_logger().info(f"Updated current directive: {agent_name}")
+                    
+                    self.get_logger().info(f"Reloaded agent: {agent_name}")
+                except Exception as e:
+                    self.get_logger().error(f"Error instantiating agent {agent_name}: {e}")
+        
+        return reloaded
 
     def _perform_reload(self):
         """Perform the actual reload synchronously."""
