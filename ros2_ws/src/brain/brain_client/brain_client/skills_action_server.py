@@ -193,10 +193,10 @@ class SkillsActionServer(Node):
         # Create service for reloading skills
         self._reload_srv = self.create_service(Trigger, "/brain/reload_primitives", self._handle_reload_skills)
 
-        # Create service for selective skill reload
+        # Create service for selective skill reload (PEAS-only, called by brain_client)
         from brain_messages.srv import ReloadSkillsAgents
-        self._reload_skills_agents_srv = self.create_service(
-            ReloadSkillsAgents, "/brain/reload_skills_agents", self._handle_reload_skills_agents
+        self._reload_skills_srv = self.create_service(
+            ReloadSkillsAgents, "/brain/reload_skills", self._handle_reload_skills_agents
         )
 
         self.get_logger().debug("Skills Action Server has started.")

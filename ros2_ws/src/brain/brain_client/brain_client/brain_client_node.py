@@ -460,9 +460,9 @@ class BrainClientNode(Node):
             GetAvailableSkills, "/brain/get_available_skills"
         )
 
-        # Service client for selective reload
-        self._reload_skills_agents_client = self._service_call_node.create_client(
-            ReloadSkillsAgents, "/brain/reload_skills_agents"
+        # Service client for selective skill reload (calls PEAS)
+        self._reload_skills_client = self._service_call_node.create_client(
+            ReloadSkillsAgents, "/brain/reload_skills"
         )
 
         # --- Service for reloading primitives and directives ---
@@ -2400,12 +2400,12 @@ class BrainClientNode(Node):
         
             # Reload specific skills via PEAS
             if skill_names:
-                if self._reload_skills_agents_client.wait_for_service(timeout_sec=5.0):
+                if self._reload_skills_client.wait_for_service(timeout_sec=5.0):
                     peas_request = ReloadSkillsAgents.Request()
                     peas_request.skills = skill_names
                     peas_request.agents = []  # PEAS doesn't handle agents
                     
-                    future = self._reload_skills_agents_client.call_async(peas_request)
+                    future = self._reload_skills_client.call_async(peas_request)
                     rclpy.spin_until_future_complete(
                         self._service_call_node, future, timeout_sec=15.0
                     )
@@ -2433,20 +2433,12 @@ class BrainClientNode(Node):
             if reloaded_skills or reloaded_agents:
                 self.register_primitives_and_directive()
             
-            # Reactivate brain
-            self._reactivate_brain()
-            
             self.get_logger().info(
                 f"\033[1;92m[BrainClient] Selective reload complete: "
                 f"{len(reloaded_skills)} skills, {len(reloaded_agents)} agents\033[0m"
             )
         except Exception as e:
             self.get_logger().error(f"[BrainClient] Selective reload failed: {e}")
-            # Attempt to reactivate brain even on failure to avoid stuck state
-            try:
-                self._reactivate_brain()
-            except Exception:
-                pass
             raise
         
         return reloaded_skills, reloaded_agents
@@ -2644,6 +2636,14 @@ class BrainClientNode(Node):
     def _reactivate_brain(self):
         """Reactivates the brain and performs a reset."""
         self.get_logger().info("\033[1;92m[BrainClient] Reactivating brain...\033[0m")
+        
+        # If no directive is configured, don't reactivate
+        if self.current_directive is None:
+            self.get_logger().warn(
+                "\033[1;93m[BrainClient] No directive configured. Brain remains inactive.\033[0m"
+            )
+            return
+        
         self.is_brain_active = True
 
         # NOTE: We do NOT apply directive_on_startup here - that's only for initial startup
