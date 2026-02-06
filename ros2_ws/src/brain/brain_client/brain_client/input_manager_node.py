@@ -93,9 +93,10 @@ class InputManagerNode(Node):
         else:
             self.logger.info(f"✅ Loaded {len(self.input_devices)} input devices: {list(self.input_devices.keys())}")
         
-        # Set data callback for all input devices
+        # Set data callback and ROS node reference for all input devices
         for input_device in self.input_devices.values():
             input_device.set_data_callback(self._handle_device_data)
+            input_device.set_node(self)
         
         # Initialize all input devices (one-time setup)
         for name, input_device in self.input_devices.items():

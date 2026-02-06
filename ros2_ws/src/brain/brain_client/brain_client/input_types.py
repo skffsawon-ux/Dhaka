@@ -46,6 +46,7 @@ class InputDevice(ABC):
         self.logger = UniversalLogger(enabled=False)
         self._proxy: Optional[ProxyClient] = None
         self._data_callback: Optional[Callable] = None
+        self._node = None  # ROS node (optional, for devices that need ROS subscriptions)
         self._active = False  # Start inactive
         self._config: Dict[str, Any] = {}
 
@@ -194,6 +195,28 @@ class InputDevice(ABC):
             proxy: ProxyClient instance
         """
         self._proxy = proxy
+    
+    @property
+    def node(self):
+        """
+        Access to the ROS node (optional).
+        
+        Use this for devices that need ROS subscriptions or services.
+        Not all devices need this - only use it if you need direct ROS access.
+        
+        Returns:
+            ROS node instance or None if not set
+        """
+        return self._node
+    
+    def set_node(self, node):
+        """
+        Set the ROS node reference (called by InputManagerNode).
+        
+        Args:
+            node: ROS node instance
+        """
+        self._node = node
     
     def set_logger(self, logger):
         """
