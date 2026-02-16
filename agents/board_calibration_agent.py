@@ -1,4 +1,3 @@
-from typing import List
 from brain_client.agent_types import Agent
 
 
@@ -15,13 +14,11 @@ class BoardCalibrationAgent(Agent):
     def display_name(self) -> str:
         return "Board Calibration Agent"
 
-    def get_skills(self) -> List[str]:
+    def get_skills(self) -> list[str]:
         """Return position recording skill."""
-        return [
-            "record_position"
-        ]
+        return ["record_position"]
 
-    def get_inputs(self) -> List[str]:
+    def get_inputs(self) -> list[str]:
         """Enable microphone input."""
         return ["micro"]
 

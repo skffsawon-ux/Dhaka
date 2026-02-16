@@ -1,4 +1,3 @@
-from typing import List
 from brain_client.agent_types import Agent
 
 
@@ -16,13 +15,11 @@ class ChessSelfPlayAgent(Agent):
     def display_name(self) -> str:
         return "Chess Self-Play Agent"
 
-    def get_skills(self) -> List[str]:
+    def get_skills(self) -> list[str]:
         """Return chess skills needed for self-play."""
-        return [
-            "pick_up_piece_simple"
-        ]
+        return ["pick_up_piece_simple"]
 
-    def get_inputs(self) -> List[str]:
+    def get_inputs(self) -> list[str]:
         """Enable microphone so user can say stop / pause."""
         return ["micro"]
 
