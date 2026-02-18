@@ -74,7 +74,8 @@
       control_mode: 3
       profile_velocity: 150
       profile_acceleration: 50
-      gains_near: [9900, 0, 100, 0, 0]
+      gains_near: [1500, 0, 2000, 0, 0]
+      gains_far: [6000, 0, 12000, 0, 0]
       gains_teleop: [300, 200, 100, 0, 0] # November teleop gains
 
     joint_3:
@@ -85,7 +86,8 @@
       control_mode: 3
       profile_velocity: 200
       profile_acceleration: 50
-      gains_near: [1500, 0, 200, 1701, 0]
+      gains_near: [1500, 0, 2000, 1701, 0]
+      gains_far: [8000, 0, 12000, 1701, 0]
       gains_teleop: [640, 100, 3600, 0, 0] # November teleop gains
 
     joint_4:
@@ -96,7 +98,8 @@
       control_mode: 3
       profile_velocity: 100
       profile_acceleration: 50 
-      gains_near: [2000, 0, 160, 0, 0]
+      gains_near: [800, 500, 3000, 0, 0]
+      gains_far: [1800, 1000, 12000, 0, 0]
       gains_teleop: [400, 400, 1000, 0, 0] # November teleop gains
 
     joint_5:
