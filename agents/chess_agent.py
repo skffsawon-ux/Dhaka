@@ -3,7 +3,7 @@ from brain_client.agent_types import Agent
 
 class ChessAgent(Agent):
     """
-    Chess Piece Agent - picks up pieces from the board using calibration data.
+    Chess Agent - plays chess against a human opponent.
     """
 
     @property
