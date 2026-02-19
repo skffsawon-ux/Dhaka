@@ -611,7 +611,8 @@ private:
                             - L45_x*std::sin(a234);
                 
                 double radial_dist = std::sqrt(ee_x*ee_x + ee_z*ee_z);
-                double extension = std::clamp((radial_dist / kMaxReach - 0.1) / 0.9, 0.0, 1.0);
+                double extension_linear = std::clamp((radial_dist / kMaxReach - 0.1) / 0.9, 0.0, 1.0);
+                double extension = extension_linear * extension_linear;  // quadratic: stays near 'near' gains longer
                 
                 bool gs_changed = false;
                 std::vector<std::tuple<int, int, int, int>> gs_pid_data;
