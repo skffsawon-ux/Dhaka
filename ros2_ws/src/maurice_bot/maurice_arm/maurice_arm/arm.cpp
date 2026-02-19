@@ -304,7 +304,8 @@ private:
                 gs_far_[i] = {jc.kp, jc.ki, jc.kd};
             }
             
-            for (const std::string& profile : {"near", "far"}) {
+            const std::array<std::string, 2> profiles = {"near", "far"};
+            for (const auto& profile : profiles) {
                 if (!gs.contains(profile)) continue;
                 auto& arr = (profile == "near") ? gs_near_ : gs_far_;
                 for (int j : {2, 3, 4}) {
@@ -516,6 +517,7 @@ private:
     
     // Timer callback for unified control loop (replaces thread-based loop)
     void controlTimerCallback() {
+        auto loop_start = std::chrono::steady_clock::now();
         try {
             std::lock_guard<std::mutex> lock(dynamixel_mutex_);
             
@@ -592,9 +594,26 @@ private:
             if (gs_enabled_ && ++gs_cycle_counter_ >= kGainScheduleInterval) {
                 gs_cycle_counter_ = 0;
                 
-                // Interpolate based on J2 angle: 0 → near, π/2 → far, clamped to [0, π/2]
-                double p2 = positions_rad[1];
-                double extension = std::clamp(p2 / M_PI_2, 0.0, 1.0);
+                // Compute extension via 2D planar FK (shoulder XZ plane, Y-axis pitch joints)
+                // Link offsets from URDF (joint-to-joint in parent frame XZ)
+                constexpr double L2_x = 0.02825, L2_z = 0.12125;  // joint2 → joint3
+                constexpr double L3_x = 0.1375,  L3_z = 0.0045;   // joint3 → joint4
+                constexpr double L45_x = 0.110838;                  // joint4 → EE (joint5 is X-roll, no XZ effect)
+                constexpr double kMaxReach = 0.37291;               // sum of link lengths
+                
+                double q2 = positions_rad[1], q3 = positions_rad[2], q4 = positions_rad[3];
+                double a2 = q2, a23 = q2 + q3, a234 = q2 + q3 + q4;
+                
+                double ee_x = L2_x*std::cos(a2)  + L2_z*std::sin(a2)
+                            + L3_x*std::cos(a23) + L3_z*std::sin(a23)
+                            + L45_x*std::cos(a234);
+                double ee_z = -L2_x*std::sin(a2)  + L2_z*std::cos(a2)
+                            - L3_x*std::sin(a23) + L3_z*std::cos(a23)
+                            - L45_x*std::sin(a234);
+                
+                double radial_dist = std::sqrt(ee_x*ee_x + ee_z*ee_z);
+                double extension_linear = std::clamp((radial_dist / kMaxReach - 0.1) / 0.9, 0.0, 1.0);
+                double extension = extension_linear * extension_linear;  // quadratic: stays near 'near' gains longer
                 
                 bool gs_changed = false;
                 std::vector<std::tuple<int, int, int, int>> gs_pid_data;
@@ -618,10 +637,15 @@ private:
                     gs_pid_data.emplace_back(joint_configs_[ji].servo_id, interp.kd, interp.ki, interp.kp);
                 }
                 if (gs_changed) {
+                    auto pid_start = std::chrono::steady_clock::now();
                     dynamixel_->syncWritePID(gs_pid_data);
+                    auto pid_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - pid_start).count();
+                    gs_pid_write_us_sum_ += pid_us;
+                    gs_pid_write_count_++;
                     RCLCPP_INFO(this->get_logger(),
-                        "GainSched ext=%.2f (J2=%.2f) | J2 P=%d I=%d D=%d | J3 P=%d I=%d D=%d | J4 P=%d I=%d D=%d",
-                        extension, p2,
+                        "GainSched ext=%.2f (r=%.3fm) | J2 P=%d I=%d D=%d | J3 P=%d I=%d D=%d | J4 P=%d I=%d D=%d",
+                        extension, radial_dist,
                         gs_last_applied_[0].kp, gs_last_applied_[0].ki, gs_last_applied_[0].kd,
                         gs_last_applied_[1].kp, gs_last_applied_[1].ki, gs_last_applied_[1].kd,
                         gs_last_applied_[2].kp, gs_last_applied_[2].ki, gs_last_applied_[2].kd);
@@ -653,6 +677,20 @@ private:
             
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Control timer error: %s", e.what());
+        }
+        auto loop_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - loop_start).count();
+        loop_us_sum_ += loop_us;
+        loop_us_max_ = std::max(loop_us_max_, loop_us);
+        loop_timing_count_++;
+        if (loop_timing_count_ >= 200) {  // log every ~2s at 100Hz
+            long avg_loop = loop_us_sum_ / loop_timing_count_;
+            long avg_pid = gs_pid_write_count_ > 0 ? gs_pid_write_us_sum_ / gs_pid_write_count_ : 0;
+            RCLCPP_INFO(this->get_logger(),
+                "LoopTiming: avg=%ldus max=%ldus | syncWritePID: avg=%ldus (%ld calls)",
+                avg_loop, loop_us_max_, avg_pid, gs_pid_write_count_);
+            loop_us_sum_ = 0; loop_us_max_ = 0; loop_timing_count_ = 0;
+            gs_pid_write_us_sum_ = 0; gs_pid_write_count_ = 0;
         }
     }
     
@@ -1553,6 +1591,10 @@ private:
     std::array<GainProfile, 3> gs_last_applied_;  // last gains written (for change detection)
     int gs_cycle_counter_ = 0;
     bool gs_was_far_ = false;  // tracks last state for threshold crossing log
+
+    // Control loop timing instrumentation
+    long loop_us_sum_ = 0, loop_us_max_ = 0, loop_timing_count_ = 0;
+    long gs_pid_write_us_sum_ = 0, gs_pid_write_count_ = 0;
 
     static constexpr int kLoadWarningThreshold = 800;  // ~80% load (0.1% units)
     static constexpr int kTemperatureWarningC = 70;
