@@ -175,4 +175,176 @@ void StereoDepthEstimator::publishDepth(
   depth_pub_->publish(std::move(msg));
 }
 
+// =============================================================================
+// Compute the footprint convex-hull mask at calibration resolution.
+// Stores the result in footprint_mask_calib_ (255 = robot body, 0 = free).
+// Called once per frame — reused by publishing and the disparity filter chain.
+// =============================================================================
+void StereoDepthEstimator::computeFootprintMaskCalib()
+{
+  sensor_msgs::msg::PointCloud2::ConstSharedPtr cloud;
+  {
+    std::lock_guard<std::mutex> lock(footprint_mutex_);
+    cloud = latest_footprint_cloud_;
+  }
+
+  footprint_mask_calib_ = cv::Mat::zeros(calib_height_, calib_width_, CV_8UC1);
+
+  if (!cloud || cloud->width * cloud->height == 0) return;
+
+  const float fx = static_cast<float>(P1_.at<double>(0, 0));
+  const float fy = static_cast<float>(P1_.at<double>(1, 1));
+  const float cx = static_cast<float>(P1_.at<double>(0, 2));
+  const float cy = static_cast<float>(P1_.at<double>(1, 2));
+
+  std::vector<cv::Point2f> projected_pts;
+
+  sensor_msgs::PointCloud2ConstIterator<float> ix(*cloud, "x");
+  sensor_msgs::PointCloud2ConstIterator<float> iy(*cloud, "y");
+  sensor_msgs::PointCloud2ConstIterator<float> iz(*cloud, "z");
+
+  for (; ix != ix.end(); ++ix, ++iy, ++iz) {
+    const float X = *ix;
+    const float Y = *iy;
+    const float Z = *iz;
+    if (Z <= 0.0f || !std::isfinite(X) || !std::isfinite(Y) || !std::isfinite(Z))
+      continue;
+    projected_pts.emplace_back(fx * X / Z + cx, fy * Y / Z + cy);
+  }
+
+  if (projected_pts.size() >= 3) {
+    std::vector<cv::Point2f> hull;
+    cv::convexHull(projected_pts, hull);
+    std::vector<cv::Point> hull_int;
+    hull_int.reserve(hull.size());
+    for (const auto& p : hull)
+      hull_int.emplace_back(static_cast<int>(p.x), static_cast<int>(p.y));
+    cv::fillConvexPoly(footprint_mask_calib_, hull_int, cv::Scalar(255));
+  }
+}
+
+// =============================================================================
+// Project /footprint/camera_optical pointcloud onto the rectified colour image
+// (points only — no convex hull)
+// =============================================================================
+void StereoDepthEstimator::publishFootprintOverlay(
+    const cv::Mat& color_rect, const rclcpp::Time& ts)
+{
+  cv::Mat overlay = color_rect.clone();
+
+  // Grab the latest footprint pointcloud for individual point drawing
+  sensor_msgs::msg::PointCloud2::ConstSharedPtr cloud;
+  {
+    std::lock_guard<std::mutex> lock(footprint_mutex_);
+    cloud = latest_footprint_cloud_;
+  }
+
+  if (cloud && cloud->width * cloud->height > 0) {
+    const float fx = static_cast<float>(P1_.at<double>(0, 0));
+    const float fy = static_cast<float>(P1_.at<double>(1, 1));
+    const float cx = static_cast<float>(P1_.at<double>(0, 2));
+    const float cy = static_cast<float>(P1_.at<double>(1, 2));
+
+    sensor_msgs::PointCloud2ConstIterator<float> ix(*cloud, "x");
+    sensor_msgs::PointCloud2ConstIterator<float> iy(*cloud, "y");
+    sensor_msgs::PointCloud2ConstIterator<float> iz(*cloud, "z");
+
+    for (; ix != ix.end(); ++ix, ++iy, ++iz) {
+      const float X = *ix;
+      const float Y = *iy;
+      const float Z = *iz;
+      if (Z <= 0.0f || !std::isfinite(X) || !std::isfinite(Y) || !std::isfinite(Z))
+        continue;
+
+      const int u = static_cast<int>(fx * X / Z + cx);
+      const int v = static_cast<int>(fy * Y / Z + cy);
+      cv::circle(overlay, cv::Point(u, v), 4, cv::Scalar(0, 255, 0), -1);
+    }
+  }
+
+  // Upscale to input resolution and publish
+  cv::Mat full;
+  cv::resize(overlay, full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_LINEAR);
+
+  auto msg = std::make_unique<sensor_msgs::msg::Image>();
+  msg->header.stamp = ts;
+  msg->header.frame_id = frame_id_;
+  msg->height = image_height_;
+  msg->width  = image_width_;
+  msg->encoding = "bgr8";
+  msg->is_bigendian = false;
+  msg->step = image_width_ * 3;
+  msg->data.resize(msg->height * msg->step);
+  memcpy(msg->data.data(), full.data, msg->data.size());
+  footprint_overlay_pub_->publish(std::move(msg));
+}
+
+// =============================================================================
+// Binary mask of the footprint convex hull (mono8: 255 inside, 0 outside).
+// Reuses footprint_mask_calib_ computed by computeFootprintMaskCalib().
+// =============================================================================
+void StereoDepthEstimator::publishFootprintMask(const rclcpp::Time& ts)
+{
+  cv::Mat full;
+  cv::resize(footprint_mask_calib_, full,
+             cv::Size(image_width_, image_height_), 0, 0, cv::INTER_NEAREST);
+
+  auto msg = std::make_unique<sensor_msgs::msg::Image>();
+  msg->header.stamp = ts;
+  msg->header.frame_id = frame_id_;
+  msg->height = image_height_;
+  msg->width  = image_width_;
+  msg->encoding = "mono8";
+  msg->is_bigendian = false;
+  msg->step = image_width_;
+  msg->data.resize(msg->height * msg->step);
+  memcpy(msg->data.data(), full.data, msg->data.size());
+  footprint_mask_pub_->publish(std::move(msg));
+}
+
+// =============================================================================
+// Rectified colour image with the footprint mask region blacked out.
+// =============================================================================
+void StereoDepthEstimator::publishFootprintCutout(
+    const cv::Mat& color_rect, const rclcpp::Time& ts)
+{
+  cv::Mat cutout = color_rect.clone();
+  cutout.setTo(cv::Scalar(0, 0, 0), footprint_mask_calib_);
+
+  cv::Mat full;
+  cv::resize(cutout, full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_LINEAR);
+
+  auto msg = std::make_unique<sensor_msgs::msg::Image>();
+  msg->header.stamp = ts;
+  msg->header.frame_id = frame_id_;
+  msg->height = image_height_;
+  msg->width  = image_width_;
+  msg->encoding = "bgr8";
+  msg->is_bigendian = false;
+  msg->step = image_width_ * 3;
+  msg->data.resize(msg->height * msg->step);
+  memcpy(msg->data.data(), full.data, msg->data.size());
+  footprint_cutout_pub_->publish(std::move(msg));
+}
+
+// =============================================================================
+// Zero out disparity pixels inside the footprint mask.
+// Called as step 1 of the filter chain (always runs).
+// =============================================================================
+void StereoDepthEstimator::applyFootprintMask(cv::Mat& disparity)
+{
+  if (footprint_mask_calib_.empty()) return;
+
+  // Mask may be at a different resolution than disparity (if downsample happened
+  // before this call, which it shouldn't — this runs first).  Resize if needed.
+  if (footprint_mask_calib_.size() != disparity.size()) {
+    cv::Mat mask_resized;
+    cv::resize(footprint_mask_calib_, mask_resized, disparity.size(),
+               0, 0, cv::INTER_NEAREST);
+    disparity.setTo(0.0f, mask_resized);
+  } else {
+    disparity.setTo(0.0f, footprint_mask_calib_);
+  }
+}
+
 } // namespace maurice_cam

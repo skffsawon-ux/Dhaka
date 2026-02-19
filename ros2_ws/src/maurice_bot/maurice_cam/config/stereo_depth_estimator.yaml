@@ -134,6 +134,7 @@ arm_camera_driver:
       - speckle
       # - temporal
       - edge_invalidation
+      - speckle
 
     # ── 0. Downsample ─────────────────────────────────────────────────────
     # Shrink the disparity map before running filters, then upscale after.

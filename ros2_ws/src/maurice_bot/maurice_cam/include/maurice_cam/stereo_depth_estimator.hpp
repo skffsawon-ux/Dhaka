@@ -79,7 +79,12 @@ private:
   void publishPointCloudXYZ(const cv::Mat& disparity_lowres, const rclcpp::Time& ts);
   void publishPointCloudColor(const cv::Mat& disparity_lowres, const cv::Mat& color_rect,
                               const rclcpp::Time& ts);
-
+  // ── Footprint Overlay, Mask & Cutout (depth_estimator/publishing.cpp) ──
+  void computeFootprintMaskCalib();
+  void publishFootprintOverlay(const cv::Mat& color_rect, const rclcpp::Time& ts);
+  void publishFootprintMask(const rclcpp::Time& ts);
+  void publishFootprintCutout(const cv::Mat& color_rect, const rclcpp::Time& ts);
+  void applyFootprintMask(cv::Mat& disparity);
   // ── Callback / Pipeline ────────────────────────────────────────────────
   void syncCallback(
     const sensor_msgs::msg::Image::ConstSharedPtr& left_msg,
@@ -94,6 +99,7 @@ private:
 
   // ── Disparity Filter Chain (filters/*.cpp) ──────────────────────────
   struct FilterTimings {
+    double footprint_mask_ms{0};
     double downsample_ms{0}, upsample_ms{0};
     double depth_clamp_ms{0}, domain_transform_ms{0}, speckle_ms{0};
     double edge_inv_ms{0}, median_ms{0}, bilateral_ms{0};
@@ -130,6 +136,11 @@ private:
   sensor_msgs::msg::CameraInfo::ConstSharedPtr right_camera_info_;
   std::mutex calib_mutex_;  // guards VPI teardown/init vs processFrame
 
+  // Footprint pointcloud subscriber (for overlay projection)
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr footprint_sub_;
+  sensor_msgs::msg::PointCloud2::ConstSharedPtr latest_footprint_cloud_;
+  std::mutex footprint_mutex_;
+
   // ── Publishers ─────────────────────────────────────────────────────────
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_pub_;
   rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr disparity_pub_;
@@ -140,6 +151,9 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr left_rectified_compressed_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_color_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr footprint_overlay_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr footprint_mask_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr footprint_cutout_pub_;
 
   // ── General Parameters ─────────────────────────────────────────────────
   std::string left_camera_info_topic_, right_camera_info_topic_;
@@ -150,6 +164,10 @@ private:
   std::string left_rectified_compressed_topic_;
   std::string pointcloud_topic_;
   std::string pointcloud_color_topic_;
+  std::string footprint_cloud_topic_;
+  std::string footprint_overlay_topic_;
+  std::string footprint_mask_topic_;
+  std::string footprint_cutout_topic_;
   std::string frame_id_;
   int max_disparity_;
   double max_fps_{10.0};
@@ -232,6 +250,9 @@ private:
   cv::Mat prev_disparity_frame_;
   std::vector<uint8_t> temporal_history_;
   std::vector<std::string> filter_order_;
+
+  // Per-frame footprint mask at calibration resolution (255 = robot body, 0 = free)
+  cv::Mat footprint_mask_calib_;
 
 
 };

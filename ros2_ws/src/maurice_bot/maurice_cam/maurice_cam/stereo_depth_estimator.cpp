@@ -45,6 +45,10 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("pointcloud_topic", "/mars/main_camera/points");
   this->declare_parameter<std::string>("pointcloud_color_topic", "/mars/main_camera/points_color");
   this->declare_parameter<int>("pointcloud_decimation", 2);
+  this->declare_parameter<std::string>("footprint_cloud_topic", "/footprint/camera_optical");
+  this->declare_parameter<std::string>("footprint_overlay_topic", "/mars/main_camera/left/image_rect_footprint");
+  this->declare_parameter<std::string>("footprint_mask_topic", "/mars/main_camera/left/footprint_mask");
+  this->declare_parameter<std::string>("footprint_cutout_topic", "/mars/main_camera/left/image_rect_cutout");
 
   // VPI creation parameters
   this->declare_parameter<int>("max_disparity", 64);
@@ -84,6 +88,10 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   pointcloud_color_topic_ = this->get_parameter("pointcloud_color_topic").as_string();
   pointcloud_decimation_ = this->get_parameter("pointcloud_decimation").as_int();
   if (pointcloud_decimation_ < 1) pointcloud_decimation_ = 1;
+  footprint_cloud_topic_ = this->get_parameter("footprint_cloud_topic").as_string();
+  footprint_overlay_topic_ = this->get_parameter("footprint_overlay_topic").as_string();
+  footprint_mask_topic_ = this->get_parameter("footprint_mask_topic").as_string();
+  footprint_cutout_topic_ = this->get_parameter("footprint_cutout_topic").as_string();
 
   max_disparity_ = this->get_parameter("max_disparity").as_int();
   include_diagonals_ = this->get_parameter("include_diagonals").as_int();
@@ -135,6 +143,14 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(this->get_logger(), "Waiting for camera_info on [%s] and [%s]",
               left_camera_info_topic_.c_str(), right_camera_info_topic_.c_str());
 
+  // Subscribe to footprint pointcloud (for overlay projection onto rectified image)
+  footprint_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+      footprint_cloud_topic_, rclcpp::SensorDataQoS(),
+      [this](sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
+        std::lock_guard<std::mutex> lock(footprint_mutex_);
+        latest_footprint_cloud_ = msg;
+      });
+
   // Create publishers (lazy publishing — only publish when subscribed)
   auto sensor_qos = rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort);
   depth_pub_                    = this->create_publisher<sensor_msgs::msg::Image>(depth_topic_, sensor_qos);
@@ -146,10 +162,19 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   left_rectified_compressed_pub_= this->create_publisher<sensor_msgs::msg::CompressedImage>(left_rectified_compressed_topic_, sensor_qos);
   pointcloud_pub_               = this->create_publisher<sensor_msgs::msg::PointCloud2>(pointcloud_topic_, sensor_qos);
   pointcloud_color_pub_         = this->create_publisher<sensor_msgs::msg::PointCloud2>(pointcloud_color_topic_, sensor_qos);
+  footprint_overlay_pub_        = this->create_publisher<sensor_msgs::msg::Image>(footprint_overlay_topic_, sensor_qos);
+  footprint_mask_pub_            = this->create_publisher<sensor_msgs::msg::Image>(footprint_mask_topic_, sensor_qos);
+  footprint_cutout_pub_           = this->create_publisher<sensor_msgs::msg::Image>(footprint_cutout_topic_, sensor_qos);
 
   RCLCPP_INFO(this->get_logger(), "Publishers created (lazy publishing - only publish when subscribed)");
   RCLCPP_INFO(this->get_logger(), "  Point cloud: %s (decimation: %d)", pointcloud_topic_.c_str(), pointcloud_decimation_);
   RCLCPP_INFO(this->get_logger(), "  Point cloud color: %s", pointcloud_color_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "  Footprint overlay: %s (from %s)",
+              footprint_overlay_topic_.c_str(), footprint_cloud_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "  Footprint mask: %s",
+              footprint_mask_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "  Footprint cutout: %s",
+              footprint_cutout_topic_.c_str());
 
   logFilterConfig();
 
@@ -190,7 +215,7 @@ void StereoDepthEstimator::syncCallback(
   if (!lock.owns_lock()) return;
 
   if (!vpi_initialized_ || !calibration_loaded_) {
-    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
                          "VPI or calibration not ready, skipping frame");
     return;
   }
@@ -295,11 +320,15 @@ void StereoDepthEstimator::processFrame(
   const bool pub_unfiltered      = disparity_unfiltered_pub_->get_subscription_count() > 0;
   const bool pub_disparity       = disparity_pub_->get_subscription_count() > 0;
   const bool pub_depth           = depth_pub_->get_subscription_count() > 0;
+  const bool pub_footprint_overlay = footprint_overlay_pub_->get_subscription_count() > 0;
+  const bool pub_footprint_mask    = footprint_mask_pub_->get_subscription_count() > 0;
+  const bool pub_footprint_cutout  = footprint_cutout_pub_->get_subscription_count() > 0;
   const auto t_sub = clock::now();
 
   const bool has_color     = left_input.channels() == 3;
   const bool need_color_rect = has_color &&
-      (pub_left_color || pub_left_compressed || pub_pointcloud_color);
+      (pub_left_color || pub_left_compressed || pub_pointcloud_color
+       || pub_footprint_overlay || pub_footprint_cutout);
 
   // ── Scale to calibration resolution ────────────────────────────────────
   cv::Mat left_scaled, right_scaled;
@@ -329,6 +358,16 @@ void StereoDepthEstimator::processFrame(
                           pub_left_color, pub_left_compressed);
   const auto t_color_pub = clock::now();
 
+  // ── Footprint mask (always computed — filter chain needs it) ───────
+  computeFootprintMaskCalib();
+  if (pub_footprint_overlay)
+    publishFootprintOverlay(left_color_rect, timestamp);
+  if (pub_footprint_mask)
+    publishFootprintMask(timestamp);
+  if (pub_footprint_cutout)
+    publishFootprintCutout(left_color_rect, timestamp);
+  const auto t_footprint = clock::now();
+
   // ── Sync GPU ───────────────────────────────────────────────────────────
   syncSGM();
   const auto t_sgm = clock::now();
@@ -342,9 +381,17 @@ void StereoDepthEstimator::processFrame(
   if (pub_unfiltered) publishDisparityMsg(disparity_float, timestamp, disparity_unfiltered_pub_);
   const auto t_unfilt = clock::now();
 
-  // ── Filter chain ───────────────────────────────────────────────────────
+  // ── Footprint mask on disparity (always, before filter chain) ────────
   cv::Mat disparity_lowres;
   FilterTimings ft;
+  {
+    const auto t_fp0 = clock::now();
+    applyFootprintMask(disparity_float);
+    ft.footprint_mask_ms = std::chrono::duration<double, std::milli>(
+        clock::now() - t_fp0).count();
+  }
+
+  // ── Filter chain ───────────────────────────────────────────────────────
   applyFilterChain(disparity_float, disparity_lowres, ft,
                             static_cast<float>(focal_length_), static_cast<float>(baseline_));
   const auto t_filter = clock::now();
@@ -372,25 +419,28 @@ void StereoDepthEstimator::processFrame(
 
   RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
     "Pipeline %.1fms | sub %.1f | scale %.1f | rectify %.1f | sgm_submit %.1f | "
-    "color_remap %.1f | mono_pub %.1f | color_pub %.1f | sgm_sync %.1f | "
+    "color_remap %.1f | mono_pub %.1f | color_pub %.1f | footprint %.1f | sgm_sync %.1f | "
     "extract %.1f | unfilt %.1f | filter %.1f | depth %.1f | pc %.1f | "
-    "subs[L:%d R:%d C:%d J:%d PC:%d PCC:%d D:%d Di:%d Du:%d col:%d]",
+    "subs[L:%d R:%d C:%d J:%d PC:%d PCC:%d D:%d Di:%d Du:%d FP:%d FM:%d FC:%d col:%d]",
     ms(t_end - t_start),
     ms(t_sub - t_start), ms(t_scale - t_sub), ms(t_rect - t_scale),
     ms(t_submit - t_rect), ms(t_color_remap - t_submit),
     ms(t_mono_pub - t_color_remap), ms(t_color_pub - t_mono_pub),
-    ms(t_sgm - t_color_pub), ms(t_extract - t_sgm),
+    ms(t_footprint - t_color_pub), ms(t_sgm - t_footprint),
+    ms(t_extract - t_sgm),
     ms(t_unfilt - t_extract), ms(t_filter - t_unfilt),
     ms(t_depth - t_filter), ms(t_pc - t_depth),
     (int)pub_left_rect, (int)pub_right_rect, (int)pub_left_color,
     (int)pub_left_compressed, (int)pub_pointcloud, (int)pub_pointcloud_color,
-    (int)pub_depth, (int)pub_disparity, (int)pub_unfiltered, (int)has_color);
+    (int)pub_depth, (int)pub_disparity, (int)pub_unfiltered,
+    (int)pub_footprint_overlay, (int)pub_footprint_mask,
+    (int)pub_footprint_cutout, (int)has_color);
 
   RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-    "Filter detail %.1fms | down %.1f | clamp %.1f | domain %.1f | speckle %.1f | "
+    "Filter detail %.1fms | fp_mask %.1f | down %.1f | clamp %.1f | domain %.1f | speckle %.1f | "
     "edge %.1f | median %.1f | bilateral %.1f | hole %.1f | temporal %.1f | up %.1f",
     ms(t_filter - t_unfilt),
-    ft.downsample_ms, ft.depth_clamp_ms, ft.domain_transform_ms,
+    ft.footprint_mask_ms, ft.downsample_ms, ft.depth_clamp_ms, ft.domain_transform_ms,
     ft.speckle_ms, ft.edge_inv_ms, ft.median_ms, ft.bilateral_ms,
     ft.hole_fill_ms, ft.temporal_ms, ft.upsample_ms);
 }
