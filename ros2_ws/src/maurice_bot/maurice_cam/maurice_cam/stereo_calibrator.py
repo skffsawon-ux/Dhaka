@@ -131,7 +131,7 @@ class StereoCalibrator(Node):
         self.declare_parameter('playback', True)  # Playback mode: replay a rosbag
         _default_bag_path = str(Path(get_package_share_directory('maurice_cam')) / 'calib')
         self.declare_parameter('bag_path', _default_bag_path)     # Path to rosbag for playback
-        self.declare_parameter('playback_rate', 1.5)
+        self.declare_parameter('playback_rate', 2)
         self.declare_parameter('interactive', True)  # CLI mode (stdin prompts)
         self.declare_parameter('auto_start', True)  # Start capture/playback at boot of this node
         self.declare_parameter('run_action_name', '/mars/main_camera/run_stereo_calibration')
@@ -451,10 +451,6 @@ class StereoCalibrator(Node):
             )
         return success, message
 
-    def _close_gripper_for_calibration(self) -> tuple[bool, str]:
-        """Close gripper to hold board before playback starts."""
-        return self._move_arm_to_prepare_pose(gripper_open=False)
-
     def _prepare_board_service_callback(self, request, response):
         """Service callback to place arm in board insertion pose."""
         del request
@@ -530,24 +526,6 @@ class StereoCalibrator(Node):
             )
 
             setup_head_and_arm(self)
-            self._publish_action_feedback(
-                goal_handle,
-                "PREPARE",
-                "Closing gripper on calibration board",
-            )
-
-            grip_success, grip_message = self._close_gripper_for_calibration()
-            if not grip_success:
-                restore_head_and_arm(self)
-                self._capture_enabled = False
-                msg = f"Failed to close gripper before playback: {grip_message}"
-                self.get_logger().error(msg)
-                goal_handle.abort()
-                result = RunStereoCalibration.Result()
-                result.success = False
-                result.message = msg
-                result.images_captured = int(self.images_captured)
-                return result
 
             playback_ok = self._playback_loop(
                 bag_path_override=bag_path,
@@ -579,7 +557,6 @@ class StereoCalibrator(Node):
                 return result
 
             if self.images_captured <= 0:
-                restore_head_and_arm(self)
                 self._capture_enabled = False
                 msg = "No captures were recorded during playback"
                 self.get_logger().error(msg)
@@ -618,10 +595,6 @@ class StereoCalibrator(Node):
 
         except Exception as e:
             self._capture_enabled = False
-            try:
-                restore_head_and_arm(self)
-            except Exception:
-                pass
             self.get_logger().error(f"Managed calibration failed: {e}")
             goal_handle.abort()
             result = RunStereoCalibration.Result()

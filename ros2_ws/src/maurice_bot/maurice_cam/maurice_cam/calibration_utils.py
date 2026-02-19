@@ -4,6 +4,7 @@ Utility helpers for stereo calibration: head/arm control and file I/O.
 
 import json
 import shutil
+import threading
 import time
 
 import cv2
@@ -30,21 +31,22 @@ def setup_head_and_arm(node):
 
     # --- Read and set head position ---
     try:
-        received = {'msg': None}
+        got_msg = threading.Event()
+        head_msg = {'data': None}
 
         def head_cb(msg):
-            received['msg'] = msg
+            head_msg['data'] = msg
+            got_msg.set()
 
         head_sub = node.create_subscription(
             String, '/mars/head/current_position', head_cb, 1)
 
-        start = time.time()
-        while received['msg'] is None and (time.time() - start) < 2.0:
-            rclpy.spin_once(node, timeout_sec=0.1)
+        # Wait for the executor to deliver the callback (no spin_once needed).
+        got_msg.wait(timeout=2.0)
         node.destroy_subscription(head_sub)
 
-        if received['msg'] is not None:
-            head_data = json.loads(received['msg'].data)
+        if head_msg['data'] is not None:
+            head_data = json.loads(head_msg['data'].data)
             node.original_head_position = int(round(head_data['current_position']))
             node.get_logger().info(f'Current head position: {node.original_head_position} degrees')
         else:
@@ -52,7 +54,7 @@ def setup_head_and_arm(node):
 
         # Set head to +20 degrees for calibration
         head_pub = node.create_publisher(Int32, '/mars/head/set_position', 1)
-        rclpy.spin_once(node, timeout_sec=0.1)
+        time.sleep(0.1)  # allow publisher discovery
         msg = Int32()
         msg.data = 20
         head_pub.publish(msg)
@@ -113,7 +115,7 @@ def restore_head_and_arm(node):
     if node.original_head_position is not None:
         try:
             head_pub = node.create_publisher(Int32, '/mars/head/set_position', 1)
-            rclpy.spin_once(node, timeout_sec=0.1)
+            time.sleep(0.1)  # allow publisher discovery
             msg = Int32()
             msg.data = node.original_head_position
             head_pub.publish(msg)
