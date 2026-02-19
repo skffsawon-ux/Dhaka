@@ -45,7 +45,7 @@ public:
     RCLCPP_INFO(this->get_logger(), "DynamicFootprint node initialized");
 
     this->declare_parameter<double>("padding", 0.03);
-    this->declare_parameter<double>("update_frequency", 5.0);
+    this->declare_parameter<double>("update_frequency", 15.0);
     this->declare_parameter<bool>("debug", false);
 
     const double update_freq = this->get_parameter("update_frequency").as_double();
