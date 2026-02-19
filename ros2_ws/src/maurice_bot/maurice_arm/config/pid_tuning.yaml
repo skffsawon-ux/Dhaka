@@ -15,9 +15,9 @@
 # =============================================================
 
 joint_1:  # Base rotation
-  kp: 500
+  kp: 300
   ki: 0
-  kd: 1000
+  kd: 300
   profile_velocity: 0
   profile_acceleration: 0
 

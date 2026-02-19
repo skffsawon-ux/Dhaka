@@ -517,6 +517,7 @@ private:
     
     // Timer callback for unified control loop (replaces thread-based loop)
     void controlTimerCallback() {
+        auto loop_start = std::chrono::steady_clock::now();
         try {
             std::lock_guard<std::mutex> lock(dynamixel_mutex_);
             
@@ -636,7 +637,12 @@ private:
                     gs_pid_data.emplace_back(joint_configs_[ji].servo_id, interp.kd, interp.ki, interp.kp);
                 }
                 if (gs_changed) {
+                    auto pid_start = std::chrono::steady_clock::now();
                     dynamixel_->syncWritePID(gs_pid_data);
+                    auto pid_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - pid_start).count();
+                    gs_pid_write_us_sum_ += pid_us;
+                    gs_pid_write_count_++;
                     RCLCPP_INFO(this->get_logger(),
                         "GainSched ext=%.2f (r=%.3fm) | J2 P=%d I=%d D=%d | J3 P=%d I=%d D=%d | J4 P=%d I=%d D=%d",
                         extension, radial_dist,
@@ -671,6 +677,20 @@ private:
             
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Control timer error: %s", e.what());
+        }
+        auto loop_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - loop_start).count();
+        loop_us_sum_ += loop_us;
+        loop_us_max_ = std::max(loop_us_max_, loop_us);
+        loop_timing_count_++;
+        if (loop_timing_count_ >= 200) {  // log every ~2s at 100Hz
+            long avg_loop = loop_us_sum_ / loop_timing_count_;
+            long avg_pid = gs_pid_write_count_ > 0 ? gs_pid_write_us_sum_ / gs_pid_write_count_ : 0;
+            RCLCPP_INFO(this->get_logger(),
+                "LoopTiming: avg=%ldus max=%ldus | syncWritePID: avg=%ldus (%ld calls)",
+                avg_loop, loop_us_max_, avg_pid, gs_pid_write_count_);
+            loop_us_sum_ = 0; loop_us_max_ = 0; loop_timing_count_ = 0;
+            gs_pid_write_us_sum_ = 0; gs_pid_write_count_ = 0;
         }
     }
     
@@ -1571,6 +1591,10 @@ private:
     std::array<GainProfile, 3> gs_last_applied_;  // last gains written (for change detection)
     int gs_cycle_counter_ = 0;
     bool gs_was_far_ = false;  // tracks last state for threshold crossing log
+
+    // Control loop timing instrumentation
+    long loop_us_sum_ = 0, loop_us_max_ = 0, loop_timing_count_ = 0;
+    long gs_pid_write_us_sum_ = 0, gs_pid_write_count_ = 0;
 
     static constexpr int kLoadWarningThreshold = 800;  // ~80% load (0.1% units)
     static constexpr int kTemperatureWarningC = 70;
