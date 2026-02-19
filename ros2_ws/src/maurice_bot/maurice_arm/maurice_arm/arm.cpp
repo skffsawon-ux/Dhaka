@@ -304,7 +304,8 @@ private:
                 gs_far_[i] = {jc.kp, jc.ki, jc.kd};
             }
             
-            for (const std::string& profile : {"near", "far"}) {
+            const std::array<std::string, 2> profiles = {"near", "far"};
+            for (const auto& profile : profiles) {
                 if (!gs.contains(profile)) continue;
                 auto& arr = (profile == "near") ? gs_near_ : gs_far_;
                 for (int j : {2, 3, 4}) {
