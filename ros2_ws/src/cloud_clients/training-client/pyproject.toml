@@ -1,0 +1,13 @@
+[project]
+name = "innate-training-client"
+version = "0.1.0"
+description = "Client CLI for the Innate Training service."
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.28",
+    "click>=8.0",
+    "zstandard>=0.20",
+]
+
+[project.scripts]
+innate-training = "training_client.cli:main"
