@@ -607,12 +607,9 @@ private:
                 double ee_x = L2_x*std::cos(a2)  + L2_z*std::sin(a2)
                             + L3_x*std::cos(a23) + L3_z*std::sin(a23)
                             + L45_x*std::cos(a234);
-                double ee_z = -L2_x*std::sin(a2)  + L2_z*std::cos(a2)
-                            - L3_x*std::sin(a23) + L3_z*std::cos(a23)
-                            - L45_x*std::sin(a234);
                 
-                double radial_dist = std::sqrt(ee_x*ee_x + ee_z*ee_z);
-                double extension_linear = std::clamp((radial_dist / kMaxReach - 0.1) / 0.9, 0.0, 1.0);
+                double horiz_reach = std::abs(ee_x);  // horizontal projection — what actually creates gravity torque
+                double extension_linear = std::clamp((horiz_reach / kMaxReach - 0.1) / 0.9, 0.0, 1.0);
                 double extension = extension_linear * extension_linear;  // quadratic: stays near 'near' gains longer
                 
                 bool gs_changed = false;
@@ -644,8 +641,8 @@ private:
                     gs_pid_write_us_sum_ += pid_us;
                     gs_pid_write_count_++;
                     RCLCPP_INFO(this->get_logger(),
-                        "GainSched ext=%.2f (r=%.3fm) | J2 P=%d I=%d D=%d | J3 P=%d I=%d D=%d | J4 P=%d I=%d D=%d",
-                        extension, radial_dist,
+                        "GainSched ext=%.2f (h=%.3fm) | J2 P=%d I=%d D=%d | J3 P=%d I=%d D=%d | J4 P=%d I=%d D=%d",
+                        extension, horiz_reach,
                         gs_last_applied_[0].kp, gs_last_applied_[0].ki, gs_last_applied_[0].kd,
                         gs_last_applied_[1].kp, gs_last_applied_[1].ki, gs_last_applied_[1].kd,
                         gs_last_applied_[2].kp, gs_last_applied_[2].ki, gs_last_applied_[2].kd);
