@@ -68,7 +68,7 @@ joint_7:  # Head
 # =============================================================
 # When enabled, PID gains for joints 2-4 are interpolated between
 # "near" (arm retracted) and "far" (arm fully extended) profiles.
-# Extension is computed from joint 2+3 angles automatically.
+# Extension is computed from 2D planar FK (joints 2+3+4) automatically.
 # The per-joint gains above are used when scheduling is OFF.
 # =============================================================
 gain_scheduling:

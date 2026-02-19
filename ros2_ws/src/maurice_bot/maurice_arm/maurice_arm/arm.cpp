@@ -592,9 +592,25 @@ private:
             if (gs_enabled_ && ++gs_cycle_counter_ >= kGainScheduleInterval) {
                 gs_cycle_counter_ = 0;
                 
-                // Interpolate based on J2 angle: 0 → near, π/2 → far, clamped to [0, π/2]
-                double p2 = positions_rad[1];
-                double extension = std::clamp(p2 / M_PI_2, 0.0, 1.0);
+                // Compute extension via 2D planar FK (shoulder XZ plane, Y-axis pitch joints)
+                // Link offsets from URDF (joint-to-joint in parent frame XZ)
+                constexpr double L2_x = 0.02825, L2_z = 0.12125;  // joint2 → joint3
+                constexpr double L3_x = 0.1375,  L3_z = 0.0045;   // joint3 → joint4
+                constexpr double L45_x = 0.110838;                  // joint4 → EE (joint5 is X-roll, no XZ effect)
+                constexpr double kMaxReach = 0.37291;               // sum of link lengths
+                
+                double q2 = positions_rad[1], q3 = positions_rad[2], q4 = positions_rad[3];
+                double a2 = q2, a23 = q2 + q3, a234 = q2 + q3 + q4;
+                
+                double ee_x = L2_x*std::cos(a2)  + L2_z*std::sin(a2)
+                            + L3_x*std::cos(a23) + L3_z*std::sin(a23)
+                            + L45_x*std::cos(a234);
+                double ee_z = -L2_x*std::sin(a2)  + L2_z*std::cos(a2)
+                            - L3_x*std::sin(a23) + L3_z*std::cos(a23)
+                            - L45_x*std::sin(a234);
+                
+                double radial_dist = std::sqrt(ee_x*ee_x + ee_z*ee_z);
+                double extension = std::clamp(radial_dist / kMaxReach, 0.0, 1.0);
                 
                 bool gs_changed = false;
                 std::vector<std::tuple<int, int, int, int>> gs_pid_data;
@@ -620,8 +636,8 @@ private:
                 if (gs_changed) {
                     dynamixel_->syncWritePID(gs_pid_data);
                     RCLCPP_INFO(this->get_logger(),
-                        "GainSched ext=%.2f (J2=%.2f) | J2 P=%d I=%d D=%d | J3 P=%d I=%d D=%d | J4 P=%d I=%d D=%d",
-                        extension, p2,
+                        "GainSched ext=%.2f (r=%.3fm) | J2 P=%d I=%d D=%d | J3 P=%d I=%d D=%d | J4 P=%d I=%d D=%d",
+                        extension, radial_dist,
                         gs_last_applied_[0].kp, gs_last_applied_[0].ki, gs_last_applied_[0].kd,
                         gs_last_applied_[1].kp, gs_last_applied_[1].ki, gs_last_applied_[1].kd,
                         gs_last_applied_[2].kp, gs_last_applied_[2].ki, gs_last_applied_[2].kd);
