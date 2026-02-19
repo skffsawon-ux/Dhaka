@@ -177,22 +177,62 @@ def apply_params(params, prev_params=None):
     if not changed:
         return 0, ""
 
-    ros2_params = {"/maurice_arm": {"ros__parameters": changed}}
-    tmp_path = "/tmp/pid_hot_reload_params.yaml"
-    with open(tmp_path, "w") as f:
-        yaml.dump(ros2_params, f)
+    # Separate gain_scheduling (JSON string) — ros2 param load can't
+    # round-trip JSON strings through YAML without corrupting them.
+    gs_value = changed.pop("gain_scheduling", None)
+    errors = []
+    total = 0
 
-    cmd = ["ros2", "param", "load", node_name, tmp_path]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-        if result.returncode == 0:
-            summary = ", ".join(f"{k}={v}" for k, v in sorted(changed.items()))
-            return len(changed), summary
-        else:
-            err = result.stderr.strip() or result.stdout.strip()
-            return 0, f"FAILED: {err}"
-    except Exception as e:
-        return 0, f"ERROR: {e}"
+    # Apply numeric params via ros2 param load (batch)
+    if changed:
+        ros2_params = {"/maurice_arm": {"ros__parameters": changed}}
+        tmp_path = "/tmp/pid_hot_reload_params.yaml"
+        with open(tmp_path, "w") as f:
+            yaml.dump(ros2_params, f)
+        cmd = ["ros2", "param", "load", node_name, tmp_path]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                total += len(changed)
+            else:
+                err = result.stderr.strip() or result.stdout.strip()
+                errors.append(f"param load: {err}")
+        except Exception as e:
+            errors.append(f"param load: {e}")
+
+    # Apply gain_scheduling via ros2 service call (bypasses the buggy
+    # yaml.safe_load in ros2 param set/load that corrupts JSON strings).
+    # type 4 = PARAMETER_STRING in rcl_interfaces.
+    if gs_value is not None:
+        # Escape single quotes in the JSON for YAML inline syntax
+        escaped = gs_value.replace("'", "''")
+        msg = (
+            "{parameters: [{name: 'gain_scheduling', "
+            f"value: {{type: 4, string_value: '{escaped}'}}}}]}}"
+        )
+        cmd = [
+            "ros2", "service", "call",
+            f"{node_name}/set_parameters",
+            "rcl_interfaces/srv/SetParameters",
+            msg,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                total += 1
+            else:
+                err = result.stderr.strip() or result.stdout.strip()
+                errors.append(f"gain_scheduling: {err}")
+        except Exception as e:
+            errors.append(f"gain_scheduling: {e}")
+
+    all_changed = dict(changed)
+    if gs_value is not None:
+        all_changed["gain_scheduling"] = "(json)"
+    summary = ", ".join(f"{k}={v}" for k, v in sorted(all_changed.items()))
+    if errors:
+        summary += " | ERRORS: " + "; ".join(errors)
+    return total, summary
 
 
 # =====================================================================
