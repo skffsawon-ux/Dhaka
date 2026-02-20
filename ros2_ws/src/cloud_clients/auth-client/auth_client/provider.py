@@ -15,8 +15,7 @@ Usage::
     auth.token_needs_renewal = True
     token = auth.token              # fetches a fresh JWT
 
-Based on ``innate_auth_verifier.client.AuthProvider``, extended with
-JWT timing introspection for proactive renewal scheduling.
+with JWT timing introspection for proactive renewal scheduling.
 """
 
 from __future__ import annotations
@@ -174,7 +173,12 @@ class AuthProvider:
             self._expires_at = None
 
     def _discover_token_endpoint(self) -> str:
-        """Fetch the OIDC discovery document and extract the token endpoint."""
+        """Fetch the OIDC discovery document and extract the token endpoint.
+
+        The returned path is rebased onto :attr:`_issuer_url` so the
+        client works even when the discovery document advertises an
+        internal hostname (e.g. ``http://auth:8080``).
+        """
         url = f"{self._issuer_url}/.well-known/openid-configuration"
         logger.debug("Discovering OIDC config from %s", url)
         try:
@@ -190,5 +194,10 @@ class AuthProvider:
                 f"got keys: {list(discovery.keys())}",
             )
 
-        logger.debug("Discovered token endpoint: %s", endpoint)
-        return endpoint
+        # Rebase: keep only the path portion and prepend our issuer URL.
+        from urllib.parse import urlparse
+
+        path = urlparse(endpoint).path
+        rebased = f"{self._issuer_url}{path}"
+        logger.debug("Discovered token endpoint: %s (rebased to %s)", endpoint, rebased)
+        return rebased
