@@ -5,6 +5,7 @@ Exposes generator functions that yield :class:`ProgressUpdate` at each step.
 Consumers (CLI, ROS node) iterate these generators to drive the workflow and
 present progress however they like.
 """
+
 from __future__ import annotations
 
 import json
@@ -13,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any, Generator
 
-from .client import OrchestratorClient
+from .client import APIError, OrchestratorClient
 from .compression import cleanup_compressed
 from .downloader import download_results
 from .types import (
@@ -101,7 +102,24 @@ class SkillManager:
                 message=f"Reusing existing skill {existing_id} from server-skill.json",
                 skill_id=existing_id,
             )
-            skill = self.client.get_skill(existing_id)
+            try:
+                skill = self.client.get_skill(existing_id)
+            except APIError as e:
+                if e.status_code == 404:
+                    logger.warning(
+                        "Skill %s from server-skill.json not found on server "
+                        "(HTTP 404) — creating a new skill",
+                        existing_id,
+                    )
+                    skill = self.client.create_skill(name=skill_name)
+                    write_skill_id(source_dir, skill.skill_id)
+                    yield ProgressUpdate(
+                        stage=ProgressStage.CREATING,
+                        message=f"Replaced stale skill {existing_id} → {skill.skill_id}",
+                        skill_id=skill.skill_id,
+                    )
+                else:
+                    raise
         else:
             yield ProgressUpdate(
                 stage=ProgressStage.CREATING,
@@ -187,10 +205,7 @@ class SkillManager:
         while True:
             run = self.client.get_run(skill_id, run_id)
 
-            changed = (
-                run.status != prev_status
-                or run.daemon_state != prev_daemon_state
-            )
+            changed = run.status != prev_status or run.daemon_state != prev_daemon_state
             if changed or prev_status is None:
                 state_str = run.status
                 if run.daemon_state:

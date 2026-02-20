@@ -13,8 +13,10 @@ On startup fetches all existing jobs; auto-downloads ``done`` runs.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
 import rclpy
@@ -59,6 +61,35 @@ def _build_training_params(
     return (params or None), None
 
 
+def _load_dotenv() -> Path | None:
+    """Load the first ``.env`` found walking up from cwd, then ``~/innate-os/.env``.
+
+    Already-set env vars are NOT overwritten.
+    Returns the path that was loaded, or ``None`` if no ``.env`` was found.
+    """
+    candidates: list[Path] = []
+    d = Path.cwd()
+    while True:
+        candidates.append(d / ".env")
+        if d.parent == d:
+            break
+        d = d.parent
+    candidates.append(Path.home() / "innate-os" / ".env")
+
+    for path in candidates:
+        if path.is_file():
+            for line in path.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip("\"'")
+                os.environ.setdefault(key, value)
+            return path
+    return None
+
+
 def _no_skill_dir(skill_id: str) -> str:
     return (
         f"No skill directory found for {skill_id}. "
@@ -72,13 +103,27 @@ class TrainingNode(Node):
 
     def __init__(self) -> None:
         super().__init__("innate_training")
+        env_path = _load_dotenv()
+        if env_path is not None:
+            self.get_logger().info(f"Loaded .env from {env_path}")
+        else:
+            self.get_logger().info("No .env file found")
 
         # ── Parameters ──────────────────────────────────────────────
-        self.declare_parameter("server_url", DEFAULT_SERVER_URL)
-        self.declare_parameter("service_key", "")
-        self.declare_parameter("auth_issuer_url", DEFAULT_AUTH_ISSUER_URL)
-        self.declare_parameter("poll_interval_sec", 30.0)
-        self.declare_parameter("status_publish_interval_sec", 3.0)
+        self.declare_parameter(
+            "server_url",
+            os.getenv("TRAINING_SERVER_URL", DEFAULT_SERVER_URL),
+        )
+        self.declare_parameter(
+            "service_key",
+            os.getenv("INNATE_SERVICE_KEY", ""),
+        )
+        self.declare_parameter(
+            "auth_issuer_url",
+            os.getenv("INNATE_AUTH_URL", DEFAULT_AUTH_ISSUER_URL),
+        )
+        self.declare_parameter("poll_interval_sec", 3.0)
+        self.declare_parameter("status_publish_interval_sec", 1.0)
 
         server_url = str(self.get_parameter("server_url").value)
         service_key = str(self.get_parameter("service_key").value)
@@ -97,8 +142,8 @@ class TrainingNode(Node):
             auth_issuer_url=auth_issuer,
             poll_interval_seconds=poll_sec,
         )
-        self._mgr = SkillManager(config)
-        self._store = JobStore()
+        self._mgr: SkillManager = SkillManager(config)
+        self._store: JobStore = JobStore()
 
         # ── Publisher ───────────────────────────────────────────────
         qos = QoSProfile(
@@ -106,7 +151,9 @@ class TrainingNode(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             reliability=ReliabilityPolicy.RELIABLE,
         )
-        self._pub = self.create_publisher(TrainingJobList, "~/job_statuses", qos)
+        self._pub: rclpy.publisher.Publisher = self.create_publisher(
+            TrainingJobList, "~/job_statuses", qos
+        )
 
         # ── Services ────────────────────────────────────────────────
         self.create_service(SubmitSkill, "~/submit_skill", self._on_submit)
