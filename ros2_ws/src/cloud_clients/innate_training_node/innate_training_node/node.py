@@ -26,7 +26,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from innate_cloud_msgs.msg import TrainingJobList, TrainingParams, TransferProgress
 from innate_cloud_msgs.srv import CreateRun, DownloadResults, SubmitSkill, UploadSkill
 
-from training_client.src.skill_manager import SkillManager
+from training_client.src.skill_manager import SkillManager, read_skill_id
 from training_client.src.types import (
     ClientConfig,
     DEFAULT_AUTH_ISSUER_URL,
@@ -35,7 +35,11 @@ from training_client.src.types import (
 )
 
 from .job_store import JobStore, build_skill_status
-from .workers import Poller, do_upload, id_to_skill_dir, maybe_auto_download
+from .workers import Poller, do_upload, maybe_auto_download
+
+
+# TODO: fetch from discovery URL once available.
+KNOWN_PRESETS: set[str] = {"act-default"}
 
 
 def _build_training_params(
@@ -46,6 +50,12 @@ def _build_training_params(
     Returns ``(params_dict, error_string)``.  On success *error_string*
     is ``None``; on failure *params_dict* is ``None``.
     """
+    if not msg.preset:
+        return None, "preset is required"
+    if msg.preset not in KNOWN_PRESETS:
+        allowed = ", ".join(sorted(KNOWN_PRESETS))
+        return None, f"unknown preset {msg.preset!r} — must be one of: {allowed}"
+
     params: dict[str, Any] = {}
     if msg.extra_json:
         try:
@@ -90,12 +100,13 @@ def _load_dotenv() -> Path | None:
     return None
 
 
-def _no_skill_dir(skill_id: str) -> str:
-    return (
-        f"No skill directory found for {skill_id}. "
-        "Looked in ~/skills/*/metadata.json and "
-        "~/innate-os/skills/*/metadata.json."
-    )
+def _require_absolute(skill_dir: str) -> str | None:
+    """Return an error string if *skill_dir* is not a non-empty absolute path."""
+    if not skill_dir:
+        return "skill_dir is required"
+    if not os.path.isabs(skill_dir):
+        return f"skill_dir must be an absolute path, got: {skill_dir}"
+    return None
 
 
 class TrainingNode(Node):
@@ -177,7 +188,7 @@ class TrainingNode(Node):
     # ── Periodic publish ────────────────────────────────────────────
 
     def _publish(self) -> None:
-        jobs, skills, transfers, completed = self._store.snapshot()
+        jobs, skills, transfers, completed, dir_map = self._store.snapshot()
         msg = TrainingJobList()
         msg.stamp = self.get_clock().now().to_msg()
 
@@ -214,6 +225,7 @@ class TrainingNode(Node):
                     upload_done,
                     dl_xfers,
                     dl_done,
+                    skill_dir=dir_map.get(sid, ""),
                 )
             )
 
@@ -224,8 +236,9 @@ class TrainingNode(Node):
     def _on_submit(
         self, req: SubmitSkill.Request, res: SubmitSkill.Response
     ) -> SubmitSkill.Response:
-        if not req.skill_dir:
-            res.success, res.message = False, "skill_dir is required"
+        err = _require_absolute(req.skill_dir)
+        if err:
+            res.success, res.message = False, err
             return res
 
         try:
@@ -242,6 +255,7 @@ class TrainingNode(Node):
                 return res
 
             self._store.put_skill(skill)
+            self._store.register_dir(skill.skill_id, req.skill_dir)
             res.success, res.skill_id = True, skill.skill_id
             res.message = f"Skill {skill.skill_id} created"
         except Exception as e:
@@ -254,24 +268,29 @@ class TrainingNode(Node):
     def _on_upload(
         self, req: UploadSkill.Request, res: UploadSkill.Response
     ) -> UploadSkill.Response:
-        if not req.skill_id:
-            res.success, res.message = False, "skill_id is required"
+        err = _require_absolute(req.skill_dir)
+        if err:
+            res.success, res.message = False, err
             return res
 
-        skill_dir = id_to_skill_dir(req.skill_id)
-        if not skill_dir:
-            res.success, res.message = False, _no_skill_dir(req.skill_id)
+        skill_id = read_skill_id(req.skill_dir)
+        if not skill_id:
+            res.success, res.message = (
+                False,
+                f"No server-skill.json in {req.skill_dir} — submit first",
+            )
             return res
 
+        self._store.register_dir(skill_id, req.skill_dir)
         threading.Thread(
             target=do_upload,
-            args=(self._mgr, self._store, req.skill_id, skill_dir),
+            args=(self._mgr, self._store, skill_id, req.skill_dir),
             daemon=True,
-            name=f"ul-{req.skill_id[:8]}",
+            name=f"ul-{skill_id[:8]}",
         ).start()
 
         res.success = True
-        res.message = f"Upload started for {req.skill_id} from {skill_dir}"
+        res.message = f"Upload started for {skill_id} from {req.skill_dir}"
         return res
 
     # ── Service: create_run ─────────────────────────────────────────
@@ -279,21 +298,33 @@ class TrainingNode(Node):
     def _on_create_run(
         self, req: CreateRun.Request, res: CreateRun.Response
     ) -> CreateRun.Response:
-        if not req.skill_id:
-            res.success, res.message = False, "skill_id is required"
-            return res
-        training_params, err = _build_training_params(req.run_params)
+        err = _require_absolute(req.skill_dir)
         if err:
             res.success, res.message = False, err
             return res
+
+        skill_id = read_skill_id(req.skill_dir)
+        if not skill_id:
+            res.success, res.message = (
+                False,
+                f"No server-skill.json in {req.skill_dir} — submit first",
+            )
+            return res
+
+        training_params, params_err = _build_training_params(req.run_params)
+        if params_err:
+            res.success, res.message = False, params_err
+            return res
+
         try:
             data = self._mgr.client.create_run(
-                req.skill_id, training_params=training_params
+                skill_id, training_params=training_params
             )
             rid = int(data["run_id"])
-            self._store.put_job(self._mgr.run_status(req.skill_id, rid))
+            self._store.put_job(self._mgr.run_status(skill_id, rid))
+            self._store.register_dir(skill_id, req.skill_dir)
             res.success, res.run_id = True, rid
-            res.message = f"Run {req.skill_id}/{rid} created"
+            res.message = f"Run {skill_id}/{rid} created"
         except Exception as e:
             self.get_logger().error(f"create_run failed: {e}")
             res.success, res.message = False, str(e)
@@ -304,18 +335,26 @@ class TrainingNode(Node):
     def _on_download(
         self, req: DownloadResults.Request, res: DownloadResults.Response
     ) -> DownloadResults.Response:
-        if not req.skill_id or req.run_id < 0:
-            res.success, res.message = False, "skill_id + non-negative run_id required"
+        err = _require_absolute(req.skill_dir)
+        if err:
+            res.success, res.message = False, err
+            return res
+        if req.run_id < 0:
+            res.success, res.message = False, "non-negative run_id required"
             return res
 
-        dest = id_to_skill_dir(req.skill_id)
-        if not dest:
-            res.success, res.message = False, _no_skill_dir(req.skill_id)
+        skill_id = read_skill_id(req.skill_dir)
+        if not skill_id:
+            res.success, res.message = (
+                False,
+                f"No server-skill.json in {req.skill_dir} — submit first",
+            )
             return res
 
-        self._store.mark_download_started(req.skill_id, req.run_id)
-        maybe_auto_download(self._mgr, self._store, req.skill_id, req.run_id, dest)
-        res.success, res.message = True, f"Download started → {dest}"
+        self._store.register_dir(skill_id, req.skill_dir)
+        self._store.mark_download_started(skill_id, req.run_id)
+        maybe_auto_download(self._mgr, self._store, skill_id, req.run_id, req.skill_dir)
+        res.success, res.message = True, f"Download started → {req.skill_dir}"
         return res
 
 

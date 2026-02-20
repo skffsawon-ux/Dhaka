@@ -14,9 +14,9 @@ Usage (in a sourced workspace):
 
     # Terminal 2 — run commands
     python3 test/test_training_node.py submit /path/to/skill --name my_skill
-    python3 test/test_training_node.py upload <skill_id>
-    python3 test/test_training_node.py run <skill_id> --preset default
-    python3 test/test_training_node.py download <skill_id> <run_id>
+    python3 test/test_training_node.py upload /path/to/skill
+    python3 test/test_training_node.py run /path/to/skill --preset default
+    python3 test/test_training_node.py download /path/to/skill <run_id>
     python3 test/test_training_node.py watch
 
 Requires: ``pip install click``
@@ -118,6 +118,8 @@ def _fmt_run(run: TrainingRunStatus, indent: str = "    ") -> str:
 def _fmt_skill(skill: TrainingSkillStatus) -> str:
     name = skill.skill_name or "(unnamed)"
     lines = [f"  Skill {skill.skill_id}  ({name})"]
+    if skill.skill_dir:
+        lines.append(f"    dir: {skill.skill_dir}")
     if skill.transfer_done:
         lines.append("    ✓ upload complete")
     if skill.has_active_transfer:
@@ -200,13 +202,13 @@ def submit(skill_dir: str, name: str) -> None:
 
 
 @cli.command()
-@click.argument("skill_id")
-def upload(skill_id: str) -> None:
-    """Upload data files for an existing skill."""
+@click.argument("skill_dir")
+def upload(skill_dir: str) -> None:
+    """Upload data files for a skill identified by its local directory."""
     node = _make_node()
     try:
         req = UploadSkill.Request()
-        req.skill_id = skill_id
+        req.skill_dir = skill_dir
         res = _call_service(node, UploadSkill, "upload_skill", req)
         if res is None:
             click.secho("✗ No response (timeout?)", fg="red")
@@ -220,7 +222,7 @@ def upload(skill_id: str) -> None:
 
 
 @cli.command("run")
-@click.argument("skill_id")
+@click.argument("skill_dir")
 @click.option("--preset", default="", help="Training preset name.")
 @click.option(
     "--env", multiple=True, help="Environment overrides as KEY=VALUE (repeatable)."
@@ -229,9 +231,9 @@ def upload(skill_id: str) -> None:
     "--json", "extra_json", default="", help="Extra params as a JSON object string."
 )
 def create_run(
-    skill_id: str, preset: str, env: tuple[str, ...], extra_json: str
+    skill_dir: str, preset: str, env: tuple[str, ...], extra_json: str
 ) -> None:
-    """Create a training run for an existing skill."""
+    """Create a training run for a skill identified by its local directory."""
     if extra_json:
         try:
             obj = json.loads(extra_json)
@@ -243,7 +245,7 @@ def create_run(
     node = _make_node()
     try:
         req = CreateRun.Request()
-        req.skill_id = skill_id
+        req.skill_dir = skill_dir
         req.run_params = TrainingParams()
         req.run_params.preset = preset
         req.run_params.env = list(env)
@@ -252,7 +254,7 @@ def create_run(
         if res is None:
             click.secho("✗ No response (timeout?)", fg="red")
         elif res.success:
-            click.secho(f"✓ Run created: {skill_id}/{res.run_id}", fg="green")
+            click.secho(f"✓ Run created: {res.run_id}", fg="green")
             click.echo(f"  {res.message}")
         else:
             click.secho(f"✗ {res.message}", fg="red")
@@ -262,14 +264,14 @@ def create_run(
 
 
 @cli.command()
-@click.argument("skill_id")
+@click.argument("skill_dir")
 @click.argument("run_id", type=int)
-def download(skill_id: str, run_id: int) -> None:
+def download(skill_dir: str, run_id: int) -> None:
     """Download results for a completed run."""
     node = _make_node()
     try:
         req = DownloadResults.Request()
-        req.skill_id = skill_id
+        req.skill_dir = skill_dir
         req.run_id = run_id
         res = _call_service(node, DownloadResults, "download_results", req)
         if res is None:

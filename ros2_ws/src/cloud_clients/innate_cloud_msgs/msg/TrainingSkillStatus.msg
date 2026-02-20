@@ -2,6 +2,7 @@
 
 string skill_id
 string skill_name
+string skill_dir            # absolute path on robot, empty if unknown
 
 # Skill-level upload progress (e.g. uploading training data).
 bool has_active_transfer

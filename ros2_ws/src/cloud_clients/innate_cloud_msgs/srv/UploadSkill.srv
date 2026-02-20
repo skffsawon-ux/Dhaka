@@ -1,6 +1,6 @@
-# Upload data files for an existing skill.
+# Upload data files for a skill identified by its local directory.
 
-string skill_id
+string skill_dir            # absolute path to skill directory
 ---
 bool success
 string message

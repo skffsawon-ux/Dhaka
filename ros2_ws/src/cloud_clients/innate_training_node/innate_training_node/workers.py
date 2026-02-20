@@ -7,11 +7,9 @@ the rest of the node exclusively through :class:`JobStore` and the
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import time
-from pathlib import Path
 
 from innate_cloud_msgs.msg import TransferProgress
 
@@ -21,32 +19,6 @@ from training_client.src.types import ProgressStage, ProgressUpdate
 from .job_store import JobStore
 
 logger = logging.getLogger(__name__)
-
-_SKILL_SEARCH_DIRS: list[Path] = [
-    Path.home() / "skills",
-    Path.home() / "innate-os" / "skills",
-]
-
-
-def id_to_skill_dir(skill_id: str) -> str | None:
-    """Locate the on-disk directory for *skill_id*.
-
-    Searches ``~/skills/*/metadata.json`` and
-    ``~/innate-os/skills/*/metadata.json`` for a JSON object whose
-    ``"id"`` field matches *skill_id*.  Returns the directory path as a
-    string, or ``None`` if not found.
-    """
-    for base in _SKILL_SEARCH_DIRS:
-        if not base.is_dir():
-            continue
-        for meta_path in base.glob("*/metadata.json"):
-            try:
-                data = json.loads(meta_path.read_text())
-                if data.get("id") == skill_id:
-                    return str(meta_path.parent)
-            except (json.JSONDecodeError, OSError):
-                continue
-    return None
 
 
 class Poller:
@@ -100,7 +72,7 @@ class Poller:
                 for run in self._mgr.list_runs(skill.skill_id):
                     self._store.put_job(run)
                     if run.status == "done":
-                        dest = id_to_skill_dir(run.skill_id)
+                        dest = self._store.dir_for_skill(run.skill_id)
                         if dest:
                             maybe_auto_download(
                                 self._mgr,
@@ -121,7 +93,7 @@ class Poller:
                 self._store.put_job(new)
                 if new.status == "done" and old.status != "done":
                     logger.info("Run %s/%s done → auto-download", skill_id, run_id)
-                    dest = id_to_skill_dir(skill_id)
+                    dest = self._store.dir_for_skill(skill_id)
                     if dest:
                         maybe_auto_download(
                             self._mgr,
@@ -132,7 +104,7 @@ class Poller:
                         )
                     else:
                         logger.warning(
-                            "No skill dir found for %s — skipping auto-download",
+                            "No skill dir known for %s — skipping auto-download",
                             skill_id,
                         )
             except Exception as e:

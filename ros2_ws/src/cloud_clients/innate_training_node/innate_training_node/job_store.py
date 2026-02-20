@@ -74,6 +74,7 @@ class JobStore:
         # Tracks transfers that finished successfully (for persistent ✓ in UI).
         self._completed_transfers: set[tuple[int, str, int]] = set()
         self._download_initiated: set[tuple[str, int]] = set()
+        self._dir_map: dict[str, str] = {}  # skill_id → skill_dir
 
     # ── Jobs ────────────────────────────────────────────────────────
 
@@ -113,6 +114,18 @@ class JobStore:
         with self._lock:
             self._download_initiated.discard((skill_id, run_id))
 
+    # ── Directory map ─────────────────────────────────────────────
+
+    def register_dir(self, skill_id: str, skill_dir: str) -> None:
+        """Record the on-disk directory for a skill."""
+        with self._lock:
+            self._dir_map[skill_id] = skill_dir
+
+    def dir_for_skill(self, skill_id: str) -> str | None:
+        """Return the known directory for *skill_id*, or ``None``."""
+        with self._lock:
+            return self._dir_map.get(skill_id)
+
     # ── Transfers ───────────────────────────────────────────────────
 
     def update_transfer(
@@ -139,6 +152,7 @@ class JobStore:
         dict[str, SkillInfo],
         dict[tuple[int, str, int], TransferProgress],
         set[tuple[int, str, int]],
+        dict[str, str],
     ]:
         """Atomically grab everything needed for one publish cycle."""
         with self._lock:
@@ -147,6 +161,7 @@ class JobStore:
                 dict(self._skills),
                 dict(self._transfers),
                 set(self._completed_transfers),
+                dict(self._dir_map),
             )
 
 
@@ -182,11 +197,13 @@ def build_skill_status(
     upload_done: bool,
     download_transfers: dict[int, TransferProgress],
     downloads_done: set[int],
+    skill_dir: str = "",
 ) -> TrainingSkillStatus:
     """Build a ``TrainingSkillStatus`` msg (skill + nested runs)."""
     s = TrainingSkillStatus()
     s.skill_id = skill_id
     s.skill_name = skill.name if skill else ""
+    s.skill_dir = skill_dir
     s.transfer_done = upload_done
     if upload_transfer is not None:
         s.has_active_transfer = True

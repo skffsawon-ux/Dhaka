@@ -1,6 +1,6 @@
-# Create a training run for an existing skill.
+# Create a training run for a skill identified by its local directory.
 
-string skill_id
+string skill_dir            # absolute path to skill directory
 innate_cloud_msgs/TrainingParams run_params
 ---
 bool success
