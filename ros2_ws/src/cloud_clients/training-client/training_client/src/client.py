@@ -1,4 +1,5 @@
 """HTTP client wrapper for the Training Orchestrator REST API."""
+
 from __future__ import annotations
 
 import logging
@@ -9,7 +10,7 @@ from typing import Any, Generator
 
 import requests
 
-from .auth import AuthProvider
+from innate_auth_verifier import AuthProvider
 from .types import ClientConfig, SkillInfo, RunInfo
 
 logger = logging.getLogger(__name__)
@@ -208,7 +209,9 @@ class OrchestratorClient:
                     timeout=self._config.upload_timeout_seconds,
                 )
                 if resp.status_code not in (200, 201):
-                    q.put(APIError(resp.status_code, f"Upload failed: {resp.text[:500]}"))
+                    q.put(
+                        APIError(resp.status_code, f"Upload failed: {resp.text[:500]}")
+                    )
                     return
             except BaseException as e:
                 q.put(e)
@@ -238,7 +241,9 @@ class OrchestratorClient:
         Returns Content-Length or None if the file doesn't exist.
         """
         try:
-            resp = requests.head(signed_url, timeout=self._config.request_timeout_seconds)
+            resp = requests.head(
+                signed_url, timeout=self._config.request_timeout_seconds
+            )
             if resp.status_code == 200:
                 cl = resp.headers.get("Content-Length")
                 return int(cl) if cl else None
@@ -261,7 +266,9 @@ class OrchestratorClient:
         """
         name = os.path.basename(dest_path)
         os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
-        with requests.get(signed_url, stream=True, timeout=self._config.download_timeout_seconds) as resp:
+        with requests.get(
+            signed_url, stream=True, timeout=self._config.download_timeout_seconds
+        ) as resp:
             resp.raise_for_status()
             total = int(resp.headers.get("Content-Length", 0))
             received = 0
@@ -288,8 +295,10 @@ class OrchestratorClient:
         """
         url = f"{self._base}{path}"
         resp = self._session.request(
-            method, url,
-            params=params, json=json,
+            method,
+            url,
+            params=params,
+            json=json,
             timeout=self._config.request_timeout_seconds,
         )
 
@@ -298,8 +307,10 @@ class OrchestratorClient:
             self._auth.token_needs_renewal = True
             self._update_auth_header()
             resp = self._session.request(
-                method, url,
-                params=params, json=json,
+                method,
+                url,
+                params=params,
+                json=json,
                 timeout=self._config.request_timeout_seconds,
             )
 
