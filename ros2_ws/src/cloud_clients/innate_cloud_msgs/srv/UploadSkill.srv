@@ -1,0 +1,6 @@
+# Upload data files for an existing skill.
+
+string skill_id
+---
+bool success
+string message

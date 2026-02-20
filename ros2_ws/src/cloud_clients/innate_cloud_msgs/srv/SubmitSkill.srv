@@ -1,0 +1,8 @@
+# Create a skill from a local directory.
+
+string skill_dir            # path to skill directory on the robot
+string name                 # optional: defaults to directory name
+---
+bool success
+string skill_id             # UUID of the created (or reused) skill
+string message

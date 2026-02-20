@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>innate_training_node</name>
+  <version>0.1.0</version>
+  <description>ROS 2 node for Innate training job management, status publishing, and file transfer.</description>
+  <maintainer email="eng@innate.bot">Innate Engineering</maintainer>
+  <license>Proprietary</license>
+
+  <depend>rclpy</depend>
+  <depend>builtin_interfaces</depend>
+  <depend>innate_cloud_msgs</depend>
+
+  <!-- innate-training-client (pip) must be installed in the Python env -->
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -1,0 +1,8 @@
+# Create a training run for an existing skill.
+
+string skill_id
+innate_cloud_msgs/TrainingParams run_params
+---
+bool success
+int32 run_id
+string message
