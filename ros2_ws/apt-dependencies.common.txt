@@ -14,6 +14,7 @@ zsh
 tmux
 
 # System libraries
+zstd
 libudev-dev
 libusb-1.0-0-dev
 libturbojpeg0-dev

@@ -1,0 +1,18 @@
+[project]
+name = "innate-proxy-client"
+version = "0.1.0"
+description = "Proxy client library for innate-os: routes Cartesia, OpenAI, etc. through the Innate service proxy."
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.24",
+    "websockets>=11.0",
+    "websocket-client>=1.6",
+    "innate-auth-client",
+]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.setuptools.packages.find]
+include = ["innate_proxy*"]
