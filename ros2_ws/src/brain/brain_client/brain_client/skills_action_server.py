@@ -465,6 +465,7 @@ class SkillsActionServer(Node):
                 "inputs": metadata.get("inputs", {}),
                 "in_training": False,
                 "episode_count": episode_count,
+                "directory": physical_data["directory"],
             }
             self.get_logger().info(
                 f"Physical skill '{name}' has inputs: {metadata.get('inputs', {})}, episodes: {episode_count}"
@@ -485,6 +486,7 @@ class SkillsActionServer(Node):
                     "inputs": metadata.get("inputs", {}),
                     "in_training": True,
                     "episode_count": episode_count,
+                    "directory": physical_data["directory"],
                 }
                 self.get_logger().info(
                     f"In-training skill '{name}' has inputs: {metadata.get('inputs', {})}, episodes: {episode_count}"
