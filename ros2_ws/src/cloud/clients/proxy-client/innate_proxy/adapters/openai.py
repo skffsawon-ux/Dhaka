@@ -22,7 +22,7 @@ import logging
 import threading
 from typing import Any, AsyncIterator, Callable, Dict, Optional
 
-import websocket   # websocket-client (sync, fast)
+import websocket  # websocket-client (sync, fast)
 import websockets  # websockets (async)
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Sync WebSocket wrapper
 # ---------------------------------------------------------------------------
+
 
 class SyncRealtimeConnection:
     """Synchronous WebSocket connection for OpenAI Realtime API via proxy.
@@ -67,7 +68,9 @@ class SyncRealtimeConnection:
         self._stop_event.clear()
         self._connected_event.clear()
 
-        ws_url = self._proxy_url.replace("https://", "wss://").replace("http://", "ws://")
+        ws_url = self._proxy_url.replace("https://", "wss://").replace(
+            "http://", "ws://"
+        )
         ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={self._model}&token={self._innate_service_key}"
 
         logger.info("Connecting to WebSocket: %s...", ws_url[:80])
@@ -138,7 +141,8 @@ class SyncRealtimeConnection:
             msg_data = json.loads(message)
             msg_type = msg_data.get("type", "unknown")
             if msg_type in (
-                "session.created", "session.updated",
+                "session.created",
+                "session.updated",
                 "input_audio_buffer.speech_started",
                 "input_audio_buffer.speech_stopped",
                 "conversation.item.input_audio_transcription.completed",
@@ -169,6 +173,7 @@ class SyncRealtimeConnection:
 # ---------------------------------------------------------------------------
 # Main adapter
 # ---------------------------------------------------------------------------
+
 
 class ProxyOpenAIClient:
     """OpenAI client that routes through the Innate service proxy.
@@ -218,6 +223,7 @@ class ProxyOpenAIClient:
             )
 
             if stream:
+
                 async def _stream() -> AsyncIterator[Dict[str, Any]]:
                     async for line in response.aiter_lines():
                         if line.startswith("data: "):
@@ -228,6 +234,7 @@ class ProxyOpenAIClient:
                                 yield json.loads(data)
                             except json.JSONDecodeError:
                                 continue
+
                 return _stream()
             return response.json()
 
@@ -272,9 +279,11 @@ class ProxyOpenAIClient:
                 ws = await websockets.connect(ws_url, extra_headers=headers)
 
             if on_message:
+
                 async def _handler() -> None:
                     async for message in ws:
                         await on_message(ws, message)
+
                 asyncio.create_task(_handler())
 
             return ws

@@ -48,7 +48,9 @@ class ProxyClient:
             raw_url = f"https://{raw_url}"
         self.proxy_url: str = raw_url
 
-        self._service_key: str = innate_service_key or os.getenv("INNATE_SERVICE_KEY", "")
+        self._service_key: str = innate_service_key or os.getenv(
+            "INNATE_SERVICE_KEY", ""
+        )
         self.config: Dict[str, Any] = config or {}
 
         issuer_url = auth_issuer_url or os.getenv("INNATE_AUTH_URL", "")
