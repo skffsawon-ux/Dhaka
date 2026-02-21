@@ -13,6 +13,7 @@ On startup fetches all existing jobs; auto-downloads + activates ``done`` runs.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from collections import defaultdict
@@ -82,11 +83,38 @@ def _require_absolute(skill_dir: str) -> str | None:
     return None
 
 
+class _RosHandler(logging.Handler):
+    """Forward stdlib log records to a ROS logger."""
+
+    _LEVEL_MAP = {
+        logging.DEBUG: "debug",
+        logging.INFO: "info",
+        logging.WARNING: "warn",
+        logging.ERROR: "error",
+        logging.CRITICAL: "fatal",
+    }
+
+    def __init__(self, ros_logger) -> None:
+        super().__init__()
+        self._ros = ros_logger
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = self.format(record)
+        fn = self._LEVEL_MAP.get(record.levelno, "info")
+        getattr(self._ros, fn)(msg)
+
+
 class TrainingNode(Node):
     """Thin ROS 2 wiring: params → services → publisher timer."""
 
     def __init__(self) -> None:
         super().__init__("innate_training")
+
+        # Bridge stdlib logs from training_client → ROS logger
+        _lib_logger = logging.getLogger("training_client")
+        _lib_logger.setLevel(logging.DEBUG)
+        _lib_logger.addHandler(_RosHandler(self.get_logger()))
+
         env_path = find_dotenv(usecwd=True)
         if env_path:
             load_dotenv(env_path)
@@ -233,7 +261,8 @@ class TrainingNode(Node):
 
             # Start upload in a background thread.
             self.get_logger().info(
-                f"Upload started for {skill.skill_id} from {req.skill_dir}"
+                f"Skill {skill.skill_id[:8]} ({skill.name}) submitted "
+                f"— upload started from {req.skill_dir}"
             )
             threading.Thread(
                 target=do_upload,
@@ -281,6 +310,10 @@ class TrainingNode(Node):
             self._store.register_dir(skill_id, req.skill_dir)
             res.success, res.run_id = True, rid
             res.message = f"Run {skill_id}/{rid} created"
+            self.get_logger().info(
+                f"Run {skill_id[:8]}/{rid} created"
+                f" | preset={training_params.get('preset', '?') if training_params else '?'}"
+            )
         except Exception as e:
             self.get_logger().error(f"create_run failed: {e}")
             res.success, res.message = False, str(e)
