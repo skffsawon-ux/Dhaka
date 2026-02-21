@@ -8,9 +8,12 @@ present progress however they like.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
+import re
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator
 
@@ -32,26 +35,111 @@ logger = logging.getLogger(__name__)
 _IGNORE_PATTERNS = {".git", "__pycache__", "*.zst", "*.zst.tmp"}
 
 SKILL_JSON = "server-skill.json"
+METADATA_JSON = "metadata.json"
+_LOCK_TIMEOUT = 10  # seconds
+
+
+@contextmanager
+def _locked_metadata(skill_dir: Path):
+    """Context manager that holds an exclusive flock on metadata.json itself.
+
+    Tries a non-blocking acquire first; if the lock is held by another
+    process, retries for up to ``_LOCK_TIMEOUT`` seconds then takes it
+    with a blocking call.
+
+    Yields the Path to metadata.json.  The lock is released when the
+    context exits.
+    """
+    meta_path = skill_dir / METADATA_JSON
+    meta_path.touch(exist_ok=True)
+    fd = meta_path.open("r+")
+    try:
+        deadline = time.monotonic() + _LOCK_TIMEOUT
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    logger.warning(
+                        "Lock on %s not acquired after %ds — forcing",
+                        meta_path,
+                        _LOCK_TIMEOUT,
+                    )
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    break
+                time.sleep(0.2)
+        yield meta_path
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        fd.close()
+
+
+def _read_meta(meta_path: Path) -> dict:
+    """Read and parse metadata.json, returning {} on missing/corrupt file."""
+    if not meta_path.is_file():
+        return {}
+    try:
+        return json.loads(meta_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_meta(meta_path: Path, meta: dict) -> None:
+    """Write metadata dict to metadata.json."""
+    meta_path.write_text(json.dumps(meta, indent=4) + "\n")
+
+
+def _migrate_skill_id(skill_dir: Path) -> None:
+    """Migrate skill_id from server-skill.json to metadata.json if needed.
+
+    Must be called inside a ``_locked_metadata`` context.
+    """
+    old_path = skill_dir / SKILL_JSON
+    meta_path = skill_dir / METADATA_JSON
+
+    if not old_path.is_file():
+        return
+
+    try:
+        old_data = json.loads(old_path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Failed to read %s during migration: %s", old_path, e)
+        return
+
+    old_id = old_data.get("id")
+    if not old_id:
+        return
+
+    meta = _read_meta(meta_path)
+    meta["training_skill_id"] = old_id
+    _write_meta(meta_path, meta)
+    old_path.unlink(missing_ok=True)
+    logger.info(
+        "Migrated skill_id %s from %s → %s", old_id, old_path.name, meta_path.name
+    )
 
 
 def read_skill_id(skill_dir: str | Path) -> str | None:
-    """Read the skill_id from server-skill.json inside *skill_dir*, or None."""
-    p = Path(skill_dir) / SKILL_JSON
-    if not p.is_file():
-        return None
-    try:
-        data = json.loads(p.read_text())
-        return data.get("id")
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Failed to read %s: %s", p, e)
-        return None
+    """Read the training_skill_id from metadata.json inside *skill_dir*.
+
+    Automatically migrates from the legacy server-skill.json format first.
+    """
+    skill_dir = Path(skill_dir)
+    with _locked_metadata(skill_dir) as meta_path:
+        _migrate_skill_id(skill_dir)
+        data = _read_meta(meta_path)
+        return data.get("training_skill_id")
 
 
 def write_skill_id(skill_dir: str | Path, skill_id: str) -> None:
-    """Write the skill_id to server-skill.json inside *skill_dir*."""
-    p = Path(skill_dir) / SKILL_JSON
-    p.write_text(json.dumps({"id": skill_id}) + "\n")
-    logger.info("Wrote skill_id %s to %s", skill_id, p)
+    """Write the training_skill_id to metadata.json inside *skill_dir*."""
+    skill_dir = Path(skill_dir)
+    with _locked_metadata(skill_dir) as meta_path:
+        meta = _read_meta(meta_path)
+        meta["training_skill_id"] = skill_id
+        _write_meta(meta_path, meta)
+        logger.info("Wrote training_skill_id %s to %s", skill_id, meta_path)
 
 
 class SkillManager:
@@ -74,7 +162,7 @@ class SkillManager:
         name: str | None = None,
     ) -> Generator[ProgressUpdate, None, SkillInfo]:
         """
-        Create a skill (or reuse one from server-skill.json).
+        Create a skill (or reuse one from metadata.json).
 
         Does **not** upload files — use ``upload_files`` for that.
 
@@ -84,7 +172,7 @@ class SkillManager:
         Parameters
         ----------
         source_dir
-            Skill directory.  ``server-skill.json`` will be written here.
+            Skill directory.  ``metadata.json`` will be updated here.
         name
             Skill name.  Defaults to the directory name.
         """
@@ -99,7 +187,7 @@ class SkillManager:
         if existing_id:
             yield ProgressUpdate(
                 stage=ProgressStage.CREATING,
-                message=f"Reusing existing skill {existing_id} from server-skill.json",
+                message=f"Reusing existing skill {existing_id} from metadata.json",
                 skill_id=existing_id,
             )
             try:
@@ -107,7 +195,7 @@ class SkillManager:
             except APIError as e:
                 if e.status_code == 404:
                     logger.warning(
-                        "Skill %s from server-skill.json not found on server "
+                        "Skill %s from metadata.json not found on server "
                         "(HTTP 404) — creating a new skill",
                         existing_id,
                     )
@@ -294,6 +382,74 @@ class SkillManager:
             run_id=run_id,
         )
 
+    # ── Activate ────────────────────────────────────────────────────
+
+    def activate_run(
+        self,
+        skill_dir: str | Path,
+        run_id: int,
+    ) -> dict[str, str]:
+        """
+        Activate a trained run by setting checkpoint and stats_file in metadata.json.
+
+        Looks inside ``skill_dir/run_id/`` for the largest ``*_step_*.pth``
+        checkpoint and a ``*stats*.pt`` file, then writes them into
+        ``metadata.json``'s ``execution`` block.
+
+        Returns a dict with ``checkpoint`` and ``stats_file`` paths
+        (relative to *skill_dir*).
+
+        Raises ``FileNotFoundError`` if the run directory or required files
+        are missing, or ``ValueError`` if metadata.json cannot be read.
+        """
+        skill_path = Path(skill_dir).resolve()
+        run_dir = skill_path / str(run_id)
+
+        if not run_dir.is_dir():
+            raise FileNotFoundError(f"Run directory does not exist: {run_dir}")
+
+        # Find checkpoint and stats
+        checkpoint = _find_latest_checkpoint(run_dir)
+        if not checkpoint:
+            raise FileNotFoundError(
+                f"No *_step_*.pth checkpoint file found in {run_dir}"
+            )
+
+        stats_file = _find_stats_file(run_dir)
+        if not stats_file:
+            raise FileNotFoundError(f"No *stats*.pt file found in {run_dir}")
+
+        # Prefix with run_id subdir so paths are relative to skill_dir
+        checkpoint = f"{run_id}/{checkpoint}"
+        stats_file = f"{run_id}/{stats_file}"
+
+        # Update metadata.json under lock
+        with _locked_metadata(skill_path) as meta_path:
+            if not meta_path.is_file():
+                raise ValueError(f"No metadata.json found in {skill_path}")
+
+            try:
+                meta = json.loads(meta_path.read_text())
+            except (json.JSONDecodeError, OSError) as e:
+                raise ValueError(f"Failed to read metadata.json: {e}") from e
+
+            # Ensure execution block exists
+            if "execution" not in meta:
+                meta["execution"] = {}
+
+            meta["execution"]["checkpoint"] = checkpoint
+            meta["execution"]["stats_file"] = stats_file
+
+            _write_meta(meta_path, meta)
+        logger.info(
+            "Activated run %d: checkpoint=%s stats_file=%s",
+            run_id,
+            checkpoint,
+            stats_file,
+        )
+
+        return {"checkpoint": checkpoint, "stats_file": stats_file}
+
     # ── Cleanup ─────────────────────────────────────────────────────
 
     def cleanup(self, source_dir: str | Path) -> None:
@@ -320,7 +476,7 @@ def _enumerate_files(source_dir: Path) -> list[str]:
             return True
         if rel.suffix == ".zst" or rel.name.endswith(".zst.tmp"):
             return True
-        if rel.name == SKILL_JSON:
+        if rel.name in (SKILL_JSON, METADATA_JSON):
             return True
         return False
 
@@ -345,3 +501,25 @@ def _enumerate_files(source_dir: Path) -> list[str]:
             files.append(str(rel))
 
     return files
+
+
+def _find_latest_checkpoint(run_dir: Path) -> str | None:
+    """Find the checkpoint file with the largest step number in *run_dir*."""
+    pattern = re.compile(r"_step_(\d+)\.pth$")
+    best_step = -1
+    best_file: str | None = None
+    for pth in run_dir.rglob("*_step_*.pth"):
+        m = pattern.search(pth.name)
+        if m:
+            step = int(m.group(1))
+            if step > best_step:
+                best_step = step
+                best_file = str(pth.relative_to(run_dir))
+    return best_file
+
+
+def _find_stats_file(run_dir: Path) -> str | None:
+    """Find a dataset stats file in *run_dir*."""
+    for pt in run_dir.rglob("*stats*.pt"):
+        return str(pt.relative_to(run_dir))
+    return None

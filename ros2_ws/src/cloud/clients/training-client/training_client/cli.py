@@ -9,12 +9,12 @@ Usage:
     python -m training_client.cli status [SKILL_DIR] RUN_ID --server URL --token TOKEN
     python -m training_client.cli watch [SKILL_DIR] RUN_ID --server URL --token TOKEN
     python -m training_client.cli download [SKILL_DIR] RUN_ID --server URL --token TOKEN
+    python -m training_client.cli activate [SKILL_DIR] RUN_ID
     python -m training_client.cli skills --server URL --token TOKEN
     python -m training_client.cli runs [SKILL_DIR] --server URL --token TOKEN
 
 SKILL_DIR defaults to the current directory.  The skill ID is read from
-SKILL_DIR/server-skill.json (written by `submit`).  Use --skill=UUID to
-override with an explicit ID.
+SKILL_DIR/metadata.json (written by `submit`).
 
 Example — create a skill, then start a training run:
 
@@ -83,18 +83,15 @@ def _make_manager(ctx: click.Context) -> SkillManager:
     return SkillManager(config)
 
 
-def _resolve_skill_id(skill_dir: str | None, skill: str | None) -> str:
-    """Return a skill_id from --skill override or server-skill.json in skill_dir."""
-    if skill:
-        return skill
+def _resolve_skill_id(skill_dir: str | None) -> str:
+    """Return a skill_id from metadata.json in skill_dir."""
     d = Path(skill_dir or ".").resolve()
     if not d.is_dir():
         raise click.BadParameter(f"Not a directory: {d}")
     sid = read_skill_id(d)
     if not sid:
         raise click.UsageError(
-            f"No server-skill.json found in {d}. "
-            "Run `submit` first or pass --skill=<ID>."
+            f"No training_skill_id found in {d}/metadata.json. " "Run `submit` first."
         )
     return sid
 
@@ -202,8 +199,8 @@ def cli(ctx: click.Context, server: str, token: str, issuer: str) -> None:
 def submit(ctx: click.Context, skill_dir: str, name: str | None) -> None:
     """Create (or reuse) a skill from SKILL_DIR.
 
-    If SKILL_DIR/server-skill.json already exists, prints the existing ID.
-    Otherwise creates a new skill and writes server-skill.json.
+    If SKILL_DIR/metadata.json already has a training_skill_id, prints the existing ID.
+    Otherwise creates a new skill and writes to metadata.json.
     Use `upload` afterwards to push data files.
     """
     manager = _make_manager(ctx)
@@ -219,14 +216,11 @@ def submit(ctx: click.Context, skill_dir: str, name: str | None) -> None:
 
 @cli.command()
 @click.argument("skill_dir", type=click.Path(exists=True, file_okay=False), default=".")
-@click.option(
-    "--skill", default=None, help="Explicit skill ID (overrides server-skill.json)"
-)
 @click.pass_context
-def upload(ctx: click.Context, skill_dir: str, skill: str | None) -> None:
+def upload(ctx: click.Context, skill_dir: str) -> None:
     """Upload data files to an existing skill."""
     manager = _make_manager(ctx)
-    skill_id = _resolve_skill_id(skill_dir, skill)
+    skill_id = _resolve_skill_id(skill_dir)
     gen = manager.upload_files(skill_id, skill_dir)
     _print_progress(gen)
 
@@ -237,14 +231,11 @@ def upload(ctx: click.Context, skill_dir: str, skill: str | None) -> None:
 @cli.command()
 @click.argument("skill_dir", type=click.Path(exists=True, file_okay=False), default=".")
 @click.argument("run_id", type=int)
-@click.option(
-    "--skill", default=None, help="Explicit skill ID (overrides server-skill.json)"
-)
 @click.pass_context
-def status(ctx: click.Context, skill_dir: str, run_id: int, skill: str | None) -> None:
+def status(ctx: click.Context, skill_dir: str, run_id: int) -> None:
     """Show current status of a run."""
     manager = _make_manager(ctx)
-    skill_id = _resolve_skill_id(skill_dir, skill)
+    skill_id = _resolve_skill_id(skill_dir)
     r = manager.run_status(skill_id, run_id)
 
     click.echo(f"Skill:        {r.skill_id}")
@@ -270,18 +261,13 @@ def status(ctx: click.Context, skill_dir: str, run_id: int, skill: str | None) -
 @cli.command()
 @click.argument("skill_dir", type=click.Path(exists=True, file_okay=False), default=".")
 @click.argument("run_id", type=int)
-@click.option(
-    "--skill", default=None, help="Explicit skill ID (overrides server-skill.json)"
-)
 @click.option("--interval", type=float, default=20.0, help="Poll interval in seconds")
 @click.pass_context
-def watch(
-    ctx: click.Context, skill_dir: str, run_id: int, skill: str | None, interval: float
-) -> None:
+def watch(ctx: click.Context, skill_dir: str, run_id: int, interval: float) -> None:
     """Poll run status until completion."""
     ctx.obj["interval"] = interval
     manager = _make_manager(ctx)
-    skill_id = _resolve_skill_id(skill_dir, skill)
+    skill_id = _resolve_skill_id(skill_dir)
 
     click.echo(
         f"Watching run {skill_id}/{run_id} (poll every {interval}s, Ctrl+C to stop)"
@@ -300,21 +286,16 @@ def watch(
 @click.argument("skill_dir", type=click.Path(exists=True, file_okay=False), default=".")
 @click.argument("run_id", type=int)
 @click.option(
-    "--skill", default=None, help="Explicit skill ID (overrides server-skill.json)"
-)
-@click.option(
     "--dest",
     type=click.Path(),
     default=None,
     help="Destination dir (default: SKILL_DIR)",
 )
 @click.pass_context
-def download(
-    ctx: click.Context, skill_dir: str, run_id: int, skill: str | None, dest: str | None
-) -> None:
+def download(ctx: click.Context, skill_dir: str, run_id: int, dest: str | None) -> None:
     """Download results for a completed run."""
     manager = _make_manager(ctx)
-    skill_id = _resolve_skill_id(skill_dir, skill)
+    skill_id = _resolve_skill_id(skill_dir)
     dest = dest or skill_dir
     gen = manager.download(skill_id, run_id, dest_dir=dest)
     _print_progress(gen)
@@ -346,14 +327,11 @@ def list_skills(ctx: click.Context) -> None:
 
 @cli.command("runs")
 @click.argument("skill_dir", type=click.Path(exists=True, file_okay=False), default=".")
-@click.option(
-    "--skill", default=None, help="Explicit skill ID (overrides server-skill.json)"
-)
 @click.pass_context
-def list_runs(ctx: click.Context, skill_dir: str, skill: str | None) -> None:
+def list_runs(ctx: click.Context, skill_dir: str) -> None:
     """List all runs for a skill."""
     manager = _make_manager(ctx)
-    skill_id = _resolve_skill_id(skill_dir, skill)
+    skill_id = _resolve_skill_id(skill_dir)
     runs = manager.list_runs(skill_id)
 
     if not runs:
@@ -375,9 +353,6 @@ def list_runs(ctx: click.Context, skill_dir: str, skill: str | None) -> None:
 
 @cli.command("run")
 @click.argument("skill_dir", type=click.Path(exists=True, file_okay=False), default=".")
-@click.option(
-    "--skill", default=None, help="Explicit skill ID (overrides server-skill.json)"
-)
 @click.option(
     "--preset", default=None, help="Server-side preset name (e.g. act-default)"
 )
@@ -404,7 +379,6 @@ def list_runs(ctx: click.Context, skill_dir: str, skill: str | None) -> None:
 def create_run(
     ctx: click.Context,
     skill_dir: str,
-    skill: str | None,
     preset: str | None,
     repo: str | None,
     ref: str | None,
@@ -440,7 +414,7 @@ def create_run(
             )
 
     manager = _make_manager(ctx)
-    skill_id = _resolve_skill_id(skill_dir, skill)
+    skill_id = _resolve_skill_id(skill_dir)
 
     params: dict[str, object] = {}
     if preset:
@@ -479,6 +453,31 @@ def create_run(
     run = manager.client.create_run(skill_id, training_params=params)
     click.echo(f"Run created: {skill_id}/{run['run_id']}")
     click.echo(f"Status: {run['status']}")
+
+
+# ── Activate ────────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.argument("skill_dir", type=click.Path(exists=True, file_okay=False), default=".")
+@click.argument("run_id", type=int)
+@click.pass_context
+def activate(ctx: click.Context, skill_dir: str, run_id: int) -> None:
+    """Activate a trained run: set checkpoint and stats_file in metadata.json.
+
+    Looks inside SKILL_DIR/RUN_ID for the largest *_step_*.pth checkpoint
+    and a *stats*.pt file, then writes them into metadata.json's
+    execution block.
+    """
+    manager = _make_manager(ctx)
+    try:
+        result = manager.activate_run(skill_dir, run_id)
+    except (FileNotFoundError, ValueError) as e:
+        raise click.UsageError(str(e))
+
+    click.echo(f"Activated run {run_id}:")
+    click.echo(f"  checkpoint:  {result['checkpoint']}")
+    click.echo(f"  stats_file:  {result['stats_file']}")
 
 
 # ── Entry point ─────────────────────────────────────────────────────

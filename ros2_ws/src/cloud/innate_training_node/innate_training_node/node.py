@@ -252,7 +252,7 @@ class TrainingNode(Node):
         if not skill_id:
             res.success, res.message = (
                 False,
-                f"No server-skill.json in {req.skill_dir} — submit first",
+                f"No training_skill_id in {req.skill_dir}/metadata.json — submit first",
             )
             return res
 
@@ -283,7 +283,7 @@ class TrainingNode(Node):
         if not skill_id:
             res.success, res.message = (
                 False,
-                f"No server-skill.json in {req.skill_dir} — submit first",
+                f"No training_skill_id in {req.skill_dir}/metadata.json — submit first",
             )
             return res
 
@@ -323,7 +323,7 @@ class TrainingNode(Node):
         if not skill_id:
             res.success, res.message = (
                 False,
-                f"No server-skill.json in {req.skill_dir} — submit first",
+                f"No training_skill_id in {req.skill_dir}/metadata.json — submit first",
             )
             return res
 

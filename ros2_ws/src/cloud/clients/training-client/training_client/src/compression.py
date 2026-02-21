@@ -114,10 +114,20 @@ def decompress_file(source: Path, dest: Path | None = None) -> Path:
 
     cmd = ["zstd", "-d", "-f", str(source), "-o", str(dest)]
 
+    compressed_size = source.stat().st_size
+
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=3600)
     except subprocess.CalledProcessError as e:
         raise CompressionError(f"zstd decompress failed: {e.stderr}") from e
+
+    decompressed_size = dest.stat().st_size
+    logger.info(
+        "Decompressed %s (%.1f MB → %.1f MB)",
+        source.name,
+        compressed_size / 1e6,
+        decompressed_size / 1e6,
+    )
 
     return dest
 
