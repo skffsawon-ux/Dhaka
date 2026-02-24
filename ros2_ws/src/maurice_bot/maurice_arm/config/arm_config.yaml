@@ -6,21 +6,21 @@ maurice_arm:
     trajectory_rate_hz: 100.0
     # joint_7 is the head servo. Its position_limits define the head angle range (radians).
     # Head position is inverted: negative head angle = positive servo angle (direction_reversed: true)
-# =============================================================
-# PID Tuning Configuration for Maurice Arm
-# =============================================================
-# Edit values below and save. If pid_hot_reload.py is running,
-# changes apply INSTANTLY to the servos.
-#
-# PID gains (range 0 - 16383):
-#   kp = Proportional gain (stiffness)
-#   ki = Integral gain (steady-state error correction)
-#   kd = Derivative gain (damping / overshoot reduction)
-#
-# Profile (0 = unlimited):
-#   profile_velocity     = max velocity (rev/min units)
-#   profile_acceleration = max acceleration (rev/min^2 units)
-# =============================================================
+    # =============================================================
+    # PID Tuning Configuration for Maurice Arm
+    # =============================================================
+    # Edit values below and save. If pid_hot_reload.py is running,
+    # changes apply INSTANTLY to the servos.
+    #
+    # PID gains (range 0 - 16383):
+    #   kp = Proportional gain (stiffness)
+    #   ki = Integral gain (steady-state error correction)
+    #   kd = Derivative gain (damping / overshoot reduction)
+    #
+    # Profile (0 = unlimited):
+    #   profile_velocity     = max velocity (rev/min units)
+    #   profile_acceleration = max acceleration (rev/min^2 units)
+    # =============================================================
     joints: |
       {
           "joint_1": {
@@ -30,7 +30,7 @@ maurice_arm:
                   "max": 1.5708
               },
               "pwm_limits": 885,
-              "control_mode": 2,
+              "control_mode": 3,
               "pid_gains": {
                   "kp": 300,
                   "ki": 0,
@@ -46,9 +46,9 @@ maurice_arm:
                   "max": 1.22
               },
               "pwm_limits": 885,
-              "control_mode": 2,
+              "control_mode": 3,
               "pid_gains": {
-                  "kp": 1000,
+                  "kp": 500,
                   "ki": 0,
                   "kd": 0
               }
@@ -62,7 +62,7 @@ maurice_arm:
               "profile_velocity": 200,
               "profile_acceleration": 50,
               "pwm_limits": 885,
-              "control_mode": 2,
+              "control_mode": 3,
               "pid_gains": {
                   "kp": 4000,
                   "ki": 0,
@@ -78,7 +78,7 @@ maurice_arm:
                   "max": 1.7453
               },
               "pwm_limits": 885,
-              "control_mode": 2,
+              "control_mode": 3,
               "pid_gains": {
                   "kp": 2000,
                   "ki": 1000,
@@ -92,7 +92,7 @@ maurice_arm:
                   "max": 1.5708
               },
               "pwm_limits": 885,
-              "control_mode": 2,
+              "control_mode": 3,
               "pid_gains": {
                   "kp": 400,
                   "ki": 0,
@@ -135,17 +135,14 @@ maurice_arm:
               }
           }
       }
-
-# =============================================================
-# Gain Scheduling (auto-adjusts PID based on arm extension)
-# =============================================================
-# When enabled, PID gains for joints 2-4 are interpolated between
-# "near" (arm retracted) and "far" (arm fully extended) profiles.
-# Extension is computed from 2D planar FK (joints 2+3+4) automatically.
-# The per-joint gains above are used when scheduling is OFF.
-# =============================================================
-    # Gain scheduling: interpolates PID gains based on elbow extension
-    # "near" = arm folded (elbow +π/2), "far" = arm extended (elbow -π/2)
+    # =============================================================
+    # Gain Scheduling (auto-adjusts PID based on arm extension)
+    # =============================================================
+    # When enabled, PID gains for joints 2-4 are interpolated between
+    # "near" (arm retracted) and "far" (arm fully extended) profiles.
+    # Extension is computed from 2D planar FK (joints 2+3+4) automatically.
+    # The per-joint gains above are used when scheduling is OFF.
+    # =============================================================
     gain_scheduling: |
       {
           "enabled": false,

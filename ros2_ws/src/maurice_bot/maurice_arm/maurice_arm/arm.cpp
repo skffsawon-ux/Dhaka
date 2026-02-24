@@ -485,12 +485,21 @@ private:
             }
             
             // Set operating mode
-            OperatingMode mode = OperatingMode::POSITION;
-            const char* mode_name = "POSITION";
-            if (config.control_mode == 1) { mode = OperatingMode::VELOCITY; mode_name = "VELOCITY"; }
-            else if (config.control_mode == 3) { mode = OperatingMode::POSITION; mode_name = "POSITION"; }
-            else if (config.control_mode == 5) { mode = OperatingMode::CURRENT_CONTROLLED_POSITION; mode_name = "CURRENT_CONTROLLED_POSITION"; }
-            else if (config.control_mode == 16) { mode = OperatingMode::PWM; mode_name = "PWM"; }
+            OperatingMode mode;
+            const char* mode_name;
+            switch (config.control_mode) {
+                case 0:  mode = OperatingMode::CURRENT;                      mode_name = "CURRENT"; break;
+                case 1:  mode = OperatingMode::VELOCITY;                     mode_name = "VELOCITY"; break;
+                case 3:  mode = OperatingMode::POSITION;                     mode_name = "POSITION"; break;
+                case 4:  mode = OperatingMode::EXTENDED_POSITION;            mode_name = "EXTENDED_POSITION"; break;
+                case 5:  mode = OperatingMode::CURRENT_CONTROLLED_POSITION;  mode_name = "CURRENT_CONTROLLED_POSITION"; break;
+                case 16: mode = OperatingMode::PWM;                          mode_name = "PWM"; break;
+                default:
+                    throw std::runtime_error(
+                        "Servo " + std::to_string(config.servo_id) +
+                        ": invalid control_mode " + std::to_string(config.control_mode) +
+                        " (valid: 0=Current, 1=Velocity, 3=Position, 4=ExtendedPosition, 5=CurrentControlledPosition, 16=PWM)");
+            }
             
             RCLCPP_INFO(this->get_logger(), "  Setting operating mode: %s (%d)", mode_name, config.control_mode);
             dynamixel_->setOperatingMode(config.servo_id, mode);
