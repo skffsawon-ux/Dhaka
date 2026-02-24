@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, Optional
+from contextlib import contextmanager
+from typing import Any, Dict, Generator, Optional
 
 import httpx
 from auth_client import AuthProvider
@@ -94,6 +95,38 @@ class ProxyClient:
             return False
         return "invalid_token" in response.headers.get("WWW-Authenticate", "")
 
+    def _renew_token(self) -> None:
+        """Force JWT renewal and update cached client headers."""
+        if self._auth is not None:
+            logger.info("JWT expired — renewing token")
+            self._auth.token_needs_renewal = True
+        new_headers = self._get_auth_headers()
+        if self._sync_client is not None:
+            self._sync_client.headers.update(new_headers)
+        if self._async_client is not None:
+            self._async_client.headers.update(new_headers)
+
+    @contextmanager
+    def _stream_with_token_renewal(
+        self, url: str, method: str, kwargs: Dict[str, Any]
+    ) -> Generator[httpx.Response, None, None]:
+        """Open a streaming request, retrying once on expired JWT."""
+        client = self.get_sync_client()
+        with client.stream(**kwargs) as response:
+            if self._auth is not None and self._is_token_expired(response):
+                # Token expired before first byte — close, renew, retry.
+                pass  # exit the context manager, then retry below
+            else:
+                yield response
+                return
+
+        # Retry with a fresh token.
+        self._renew_token()
+        client = self.get_sync_client()
+        with client.stream(**kwargs) as response:
+            response.raise_for_status()
+            yield response
+
     # -- Sync HTTP ------------------------------------------------------------
 
     def get_sync_client(self) -> httpx.Client:
@@ -126,7 +159,7 @@ class ProxyClient:
                 "Set INNATE_PROXY_URL and INNATE_SERVICE_KEY "
                 "(in environment or .env file)."
             )
-        client = self.get_sync_client()
+
         url = f"{self.proxy_url}/v1/services/{service_name}/{endpoint.lstrip('/')}"
 
         kwargs: Dict[str, Any] = {"method": method, "url": url, "params": params}
@@ -135,7 +168,7 @@ class ProxyClient:
         elif data is not None:
             kwargs["content"] = data
 
-        return client.stream(**kwargs)
+        return self._stream_with_token_renewal(url, method, kwargs)
 
     # -- Async HTTP -----------------------------------------------------------
 
@@ -174,9 +207,7 @@ class ProxyClient:
         response = await client.request(**kwargs)
 
         if self._auth is not None and self._is_token_expired(response):
-            logger.info("JWT expired — renewing and retrying %s %s", method, url)
-            self._auth.token_needs_renewal = True
-            client.headers.update(self._get_auth_headers())
+            self._renew_token()
             response = await client.request(**kwargs)
 
         response.raise_for_status()
