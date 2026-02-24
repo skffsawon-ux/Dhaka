@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Loop through arm poses with configurable delays. Edit poses/delays below."""
+
+import subprocess, time, sys
+
+# ── Edit these ──────────────────────────────────────────────────
+POSES = [
+    # [j1, j2, j3, j4, j5, j6],  delay_after_secs
+    ([0.0,  0.0,  0.0,  0.0, 0.0, 0.0],   2.0),
+    ([0.0, -0.5,  0.5,  0.3, 0.0, 0.0],   2.0),
+    ([0.5, -0.3,  0.8, -0.2, 0.0, 0.0],   2.0),
+    ([0.0,  0.0,  0.0,  0.0, 0.0, 0.0],   2.0),
+]
+MOVE_TIME = 0.5   # seconds for each move
+LOOPS = 0         # 0 = infinite
+# ────────────────────────────────────────────────────────────────
+
+def goto_js(joints, t):
+    data_str = ",".join(f"{v}" for v in joints)
+    msg = f"{{data: {{data: [{data_str}]}}, time: {t}}}"
+    cmd = ["ros2", "service", "call", "/mars/arm/goto_js", "maurice_msgs/srv/GotoJS", msg]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    ok = "success=True" in r.stdout
+    return ok
+
+def main():
+    loop = 0
+    try:
+        while LOOPS == 0 or loop < LOOPS:
+            loop += 1
+            print(f"\n═══ Loop {loop} ═══")
+            for i, (joints, delay) in enumerate(POSES):
+                label = " ".join(f"{v:+.2f}" for v in joints)
+                print(f"  [{i+1}/{len(POSES)}] goto [{label}]  t={MOVE_TIME}s ... ", end="", flush=True)
+                ok = goto_js(joints, MOVE_TIME)
+                print("✓" if ok else "✗")
+                if delay > 0:
+                    time.sleep(delay)
+    except KeyboardInterrupt:
+        print("\nStopped.")
+
+if __name__ == "__main__":
+    main()
