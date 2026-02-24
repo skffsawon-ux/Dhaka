@@ -51,7 +51,7 @@ class ProxyClient:
             config: Service configuration dict (models, voice IDs, etc.)
             logger: Optional ROS logger to pass to service adapters for logging
         """
-        self._proxy_url = (proxy_url or os.getenv("INNATE_PROXY_URL", "")).rstrip("/")
+        self._proxy_url = (proxy_url or os.getenv("INNATE_PROXY_URL", "https://proxy-v1.innate.bot")).rstrip("/")
         self._innate_service_key = innate_service_key or os.getenv("INNATE_SERVICE_KEY", "")
         self._config = config or {}
         self._logger = logger

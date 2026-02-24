@@ -1,0 +1,7 @@
+# Manually trigger result download for a completed run.
+
+string skill_dir            # absolute path to skill directory
+int32 run_id
+---
+bool success
+string message

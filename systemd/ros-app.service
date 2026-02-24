@@ -9,8 +9,8 @@ After=zenoh-router.service network-online.target
 # The launch script handles sourcing, tmux management, and running ros2 launch
 # Ensure this script is executable (chmod +x)
 # Preserve common/ROS environment variables including INNATE_OS_ROOT
-Environment="INNATE_OS_ROOT=/home/jetson1/innate-os"
-ExecStart=/usr/bin/sudo -u jetson1 --preserve-env=PATH,ROS_DISTRO,AMENT_PREFIX_PATH,PYTHONPATH,LD_LIBRARY_PATH,INNATE_OS_ROOT -- /bin/bash -c '${INNATE_OS_ROOT}/scripts/launch_ros_in_tmux.sh'
+Environment="INNATE_OS_ROOT=/home/jetson1/innate-os" "XDG_RUNTIME_DIR=/run/user/1000"
+ExecStart=/usr/bin/sudo -u jetson1 --preserve-env=PATH,ROS_DISTRO,XDG_RUNTIME_DIR,AMENT_PREFIX_PATH,PYTHONPATH,LD_LIBRARY_PATH,INNATE_OS_ROOT -- /bin/bash -c '${INNATE_OS_ROOT}/scripts/launch_ros_in_tmux.sh'
 # Stop the tmux session (kills all ROS processes in it)
 ExecStop=/usr/bin/sudo -u jetson1 -- /bin/bash -c 'tmux kill-session -t ros_nodes 2>/dev/null || true'
 

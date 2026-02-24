@@ -1,0 +1,8 @@
+# Create a training run for a skill identified by its local directory.
+
+string skill_dir            # absolute path to skill directory
+innate_cloud_msgs/TrainingParams run_params
+---
+bool success
+int32 run_id
+string message

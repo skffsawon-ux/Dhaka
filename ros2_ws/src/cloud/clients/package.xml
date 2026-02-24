@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>cloud_clients</name>
+  <version>0.1.0</version>
+  <description>Innate cloud client libraries: auth, proxy, and training.</description>
+  <maintainer email="eng@innate.bot">Innate Engineering</maintainer>
+  <license>Proprietary</license>
+
+  <!-- pip deps (httpx, websockets, websocket-client, requests, click, zstandard)
+       are listed in ros2_ws/pip-requirements.txt -->
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

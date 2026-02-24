@@ -31,9 +31,14 @@ smbus2
 sounddevice
 bluezero
 
-# Text-to-Speech
-cartesia
+# Text-to-Speech (via innate-proxy-client)
+httpx
 websocket-client
+
+# Training client dependencies
+requests
+click
+zstandard
 
 # Other AI
 inspireface
