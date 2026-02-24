@@ -26,7 +26,7 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 async def chat_once(client: ProxyClient, message: str) -> None:
     """Send a single user message and print the reply."""
-    resp = await client.request(
+    resp = await client.request_async(
         service_name="openai",
         endpoint="/v1/chat/completions",
         method="POST",

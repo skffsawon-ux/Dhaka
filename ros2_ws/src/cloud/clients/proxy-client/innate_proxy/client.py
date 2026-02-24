@@ -24,6 +24,9 @@ from typing import Any, Dict, Optional
 
 import httpx
 from auth_client import AuthProvider
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +113,12 @@ class ProxyClient:
         params: Optional[Dict[str, Any]] = None,
     ) -> httpx.Response:
         """Make a synchronous request through the proxy."""
+        if not self.is_available():
+            raise RuntimeError(
+                "ProxyClient is not configured. "
+                "Set INNATE_PROXY_URL and INNATE_SERVICE_KEY "
+                "(in environment or .env file)."
+            )
         client = self.get_sync_client()
         url = f"{self.proxy_url}/v1/services/{service_name}/{endpoint.lstrip('/')}"
 
@@ -149,6 +158,12 @@ class ProxyClient:
         params: Optional[Dict[str, Any]] = None,
     ) -> httpx.Response:
         """Make an asynchronous request through the proxy."""
+        if not self.is_available():
+            raise RuntimeError(
+                "ProxyClient is not configured. "
+                "Set INNATE_PROXY_URL and INNATE_SERVICE_KEY "
+                "(in environment or .env file)."
+            )
         client = self.get_async_client()
         url = f"{self.proxy_url}/v1/services/{service_name}/{endpoint.lstrip('/')}"
 
