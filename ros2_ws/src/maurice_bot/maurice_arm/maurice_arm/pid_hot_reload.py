@@ -162,6 +162,10 @@ def load_pid_config(path):
             if field in joint_data:
                 params[f"{joint_key}_{field}"] = int(joint_data[field])
 
+    # Top-level scalar params (hot-reloadable)
+    if "max_jerk" in ros_params:
+        params["max_jerk"] = float(ros_params["max_jerk"])
+
     # gain_scheduling is already a JSON string in the YAML (literal block |)
     gs_str = ros_params.get("gain_scheduling", "").strip()
     if gs_str:

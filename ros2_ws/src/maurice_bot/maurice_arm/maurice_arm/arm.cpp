@@ -47,6 +47,7 @@ public:
         this->declare_parameter("baud_rate", 1000000);
         this->declare_parameter("control_frequency", 100.0);
         this->declare_parameter("trajectory_rate_hz", 30.0);
+        this->declare_parameter("max_jerk", 0.0);  // rad/s³, 0 = disabled
         this->declare_parameter("joints", "{}");
         
         int baud_rate = this->get_parameter("baud_rate").as_int();
@@ -349,8 +350,8 @@ private:
             gs_enabled_ = gs.value("enabled", false);
             
             // Initialize with current joint defaults
-            for (int i = 0; i < 3; i++) {
-                auto& jc = joint_configs_[i + 1];  // joints 2, 3, 4
+            for (int i = 0; i < 4; i++) {
+                auto& jc = joint_configs_[i];  // joints 1, 2, 3, 4
                 gs_near_[i] = {jc.kp, jc.ki, jc.kd, jc.ff1, jc.ff2};
                 gs_far_[i] = {jc.kp, jc.ki, jc.kd, jc.ff1, jc.ff2};
             }
@@ -359,11 +360,11 @@ private:
             for (const auto& profile : profiles) {
                 if (!gs.contains(profile)) continue;
                 auto& arr = (profile == "near") ? gs_near_ : gs_far_;
-                for (int j : {2, 3, 4}) {
+                for (int j : {1, 2, 3, 4}) {
                     std::string key = "joint_" + std::to_string(j);
                     if (!gs[profile].contains(key)) continue;
                     auto& jg = gs[profile][key];
-                    int idx = j - 2;
+                    int idx = j - 1;
                     arr[idx].kp = jg.value("kp", arr[idx].kp);
                     arr[idx].ki = jg.value("ki", arr[idx].ki);
                     arr[idx].kd = jg.value("kd", arr[idx].kd);
@@ -372,14 +373,16 @@ private:
                 }
             }
             
-            RCLCPP_INFO(this->get_logger(), "Gain scheduling %s | near: J2[%d,%d,%d] J3[%d,%d,%d] J4[%d,%d,%d] | far: J2[%d,%d,%d] J3[%d,%d,%d] J4[%d,%d,%d]",
+            RCLCPP_INFO(this->get_logger(), "Gain scheduling %s | near: J1[%d,%d,%d] J2[%d,%d,%d] J3[%d,%d,%d] J4[%d,%d,%d] | far: J1[%d,%d,%d] J2[%d,%d,%d] J3[%d,%d,%d] J4[%d,%d,%d]",
                 gs_enabled_ ? "ENABLED" : "DISABLED",
                 gs_near_[0].kp, gs_near_[0].ki, gs_near_[0].kd,
                 gs_near_[1].kp, gs_near_[1].ki, gs_near_[1].kd,
                 gs_near_[2].kp, gs_near_[2].ki, gs_near_[2].kd,
+                gs_near_[3].kp, gs_near_[3].ki, gs_near_[3].kd,
                 gs_far_[0].kp, gs_far_[0].ki, gs_far_[0].kd,
                 gs_far_[1].kp, gs_far_[1].ki, gs_far_[1].kd,
-                gs_far_[2].kp, gs_far_[2].ki, gs_far_[2].kd);
+                gs_far_[2].kp, gs_far_[2].ki, gs_far_[2].kd,
+                gs_far_[3].kp, gs_far_[3].ki, gs_far_[3].kd);
         } catch (const json::exception& e) {
             RCLCPP_WARN(this->get_logger(), "Failed to parse gain_scheduling JSON: %s", e.what());
         }
@@ -401,6 +404,13 @@ private:
             // Handle gain scheduling JSON string
             if (name == "gain_scheduling") {
                 parseGainScheduling(param.as_string());
+                continue;
+            }
+            
+            // max_jerk is read on-the-fly from the parameter server each trajectory,
+            // so just log the change — no servo write needed.
+            if (name == "max_jerk") {
+                RCLCPP_INFO(this->get_logger(), "Hot-reload: max_jerk = %.1f rad/s³", param.as_double());
                 continue;
             }
             
@@ -453,13 +463,13 @@ private:
             }
         }
         
-        // If gain scheduling is active, push hot-reloaded PID for joints 2-4
+        // If gain scheduling is active, push hot-reloaded PID for joints 1-4
         // into gs_near_ and gs_far_ so the control loop doesn't immediately
         // overwrite them with stale interpolated values.
         if (gs_enabled_) {
             for (int jn : pid_changed_joints) {
-                if (jn >= 2 && jn <= 4) {
-                    int gi = jn - 2;  // gs index 0,1,2 = joints 2,3,4
+                if (jn >= 1 && jn <= 4) {
+                    int gi = jn - 1;  // gs index 0,1,2,3 = joints 1,2,3,4
                     const auto& c = joint_configs_[jn - 1];
                     gs_near_[gi] = {c.kp, c.ki, c.kd, c.ff1, c.ff2};
                     gs_far_[gi]  = {c.kp, c.ki, c.kd, c.ff1, c.ff2};
@@ -735,8 +745,8 @@ private:
                 bool gs_changed = false;
                 std::vector<std::tuple<int, int, int, int, int, int>> gs_pid_data;
                 
-                for (int i = 0; i < 3; i++) {
-                    int ji = i + 1;  // joint_configs_ index (0-based): joints 2,3,4 = indices 1,2,3
+                for (int i = 0; i < 4; i++) {
+                    int ji = i;  // joint_configs_ index (0-based): joints 1,2,3,4 = indices 0,1,2,3
                     GainProfile interp;
                     interp.kp = gs_near_[i].kp + static_cast<int>(extension * (gs_far_[i].kp - gs_near_[i].kp));
                     interp.ki = gs_near_[i].ki + static_cast<int>(extension * (gs_far_[i].ki - gs_near_[i].ki));
@@ -766,11 +776,12 @@ private:
                         std::chrono::steady_clock::now() - pid_start).count();
                     timing_stats_[8].add(pid_us);
                     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
-                        "GainSched ext=%.2f (h=%.3fm) | J2 P=%d I=%d D=%d | J3 P=%d I=%d D=%d | J4 P=%d I=%d D=%d",
+                        "GainSched ext=%.2f (h=%.3fm) | J1 P=%d D=%d | J2 P=%d D=%d | J3 P=%d D=%d | J4 P=%d D=%d",
                         extension, horiz_reach,
-                        gs_last_applied_[0].kp, gs_last_applied_[0].ki, gs_last_applied_[0].kd,
-                        gs_last_applied_[1].kp, gs_last_applied_[1].ki, gs_last_applied_[1].kd,
-                        gs_last_applied_[2].kp, gs_last_applied_[2].ki, gs_last_applied_[2].kd);
+                        gs_last_applied_[0].kp, gs_last_applied_[0].kd,
+                        gs_last_applied_[1].kp, gs_last_applied_[1].kd,
+                        gs_last_applied_[2].kp, gs_last_applied_[2].kd,
+                        gs_last_applied_[3].kp, gs_last_applied_[3].kd);
                 }
             }
             ts[6] = std::chrono::steady_clock::now();
@@ -1386,8 +1397,10 @@ private:
     }
     
     /**
-     * Compute a cubic (third-order) spline trajectory between start and goal.
-     * Uses smooth acceleration/deceleration profile: ratio = 3*(t/T)^2 - 2*(t/T)^3
+     * Compute a quintic (fifth-order) smootherstep trajectory between start and goal.
+     * Uses profile: ratio = 6t^5 - 15t^4 + 10t^3
+     * Zero velocity AND zero acceleration at both endpoints → continuous jerk.
+     * Trade-off: 25% higher peak velocity at midpoint vs cubic smoothstep.
      * 
      * @param start Starting joint positions in radians
      * @param goal Goal joint positions in radians
@@ -1408,14 +1421,31 @@ private:
             return trajectory;
         }
         
+        // Jerk limiting: extend duration if needed so peak jerk stays within max_jerk.
+        // Quintic smootherstep peak jerk = 60 * |Δθ| / T³  (at t=0 and t=T).
+        double max_jerk = this->get_parameter("max_jerk").as_double();
+        if (max_jerk > 0.0) {
+            double max_delta = 0.0;
+            for (size_t j = 0; j < start.size(); ++j) {
+                max_delta = std::max(max_delta, std::abs(goal[j] - start[j]));
+            }
+            double min_duration = std::cbrt(60.0 * max_delta / max_jerk);
+            if (min_duration > duration) {
+                RCLCPP_INFO(this->get_logger(),
+                    "Jerk limit %.1f rad/s³: extending trajectory %.2fs → %.2fs (Δθ_max=%.3f rad)",
+                    max_jerk, duration, min_duration, max_delta);
+                duration = min_duration;
+            }
+        }
+        
         int num_steps = static_cast<int>(duration / dt);
         if (num_steps < 1) num_steps = 1;
         
         for (int step = 0; step <= num_steps; ++step) {
             double t = step * dt;
             double t_ratio = t / duration;
-            // Cubic spline interpolation: smooth acceleration and deceleration
-            double ratio = 3.0 * t_ratio * t_ratio - 2.0 * t_ratio * t_ratio * t_ratio;
+            // Quintic smootherstep: zero velocity + zero acceleration at endpoints
+            double ratio = t_ratio * t_ratio * t_ratio * (t_ratio * (6.0 * t_ratio - 15.0) + 10.0);
             
             std::vector<double> point(start.size());
             for (size_t j = 0; j < start.size(); ++j) {
@@ -1475,11 +1505,17 @@ private:
             return false;
         }
         
-        RCLCPP_INFO(this->get_logger(), "Computed cubic spline trajectory with %zu points over %.2fs",
-                    interpolated_trajectory.size(), trajectory_time);
+        // Detect if jerk limiting extended the duration
+        double actual_duration = (interpolated_trajectory.size() - 1) * dt;
+        if (actual_duration > trajectory_time * 1.01) {
+            RCLCPP_WARN(this->get_logger(),
+                "Jerk-limited: requested %.2fs but executing %.2fs (+%.0f%%)",
+                trajectory_time, actual_duration,
+                100.0 * (actual_duration - trajectory_time) / trajectory_time);
+        }
         
         RCLCPP_INFO(this->get_logger(), "Executing trajectory with %zu waypoints over %.2f seconds", 
-                    interpolated_trajectory.size(), trajectory_time);
+                    interpolated_trajectory.size(), actual_duration);
         
         // Execute trajectory by sending each waypoint with a sleep
         auto sleep_duration = std::chrono::duration<double>(dt);
@@ -1778,9 +1814,9 @@ private:
 
     static constexpr int kGainScheduleInterval = 20;  // control cycles between updates (~200ms at 100Hz)
     bool gs_enabled_ = false;
-    std::array<GainProfile, 3> gs_near_;          // near profiles for joints 2, 3, 4
-    std::array<GainProfile, 3> gs_far_;           // far profiles for joints 2, 3, 4
-    std::array<GainProfile, 3> gs_last_applied_;  // last gains written (for change detection)
+    std::array<GainProfile, 4> gs_near_;          // near profiles for joints 1, 2, 3, 4
+    std::array<GainProfile, 4> gs_far_;           // far profiles for joints 1, 2, 3, 4
+    std::array<GainProfile, 4> gs_last_applied_;  // last gains written (for change detection)
     int gs_cycle_counter_ = 0;
     bool gs_was_far_ = false;  // tracks last state for threshold crossing log
 

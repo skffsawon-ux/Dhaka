@@ -4,6 +4,8 @@ maurice_arm:
     baud_rate: 1000000
     control_frequency: 200.0
     trajectory_rate_hz: 100.0
+    # max_jerk: 1000.0  # rad/s³ jerk limit for trajectories (0 = disabled)
+    max_jerk: 150.0  # rad/s³ jerk limit for trajectories (0 = disabled)
     # joint_7 is the head servo. Its position_limits define the head angle range (radians).
     # Head position is inverted: negative head angle = positive servo angle (direction_reversed: true)
     # =============================================================
@@ -47,16 +49,18 @@ maurice_arm:
               "pwm_limits": 885,
               "control_mode": 3,
               "pid_gains": {
-                  "kp": 300,
+                  "kp": 220,
                   "ki": 0,
-                  "kd": 300
+                  "kd": 100,
+                  "ff1": 100,
+                  "ff2": 200
               }
           },
           "joint_2": {
               "servo_id": 2,
               "motor_type": "XC430-W150",
-              "profile_velocity": 200,
-              "profile_acceleration": 50,
+              "profile_velocity": 0,
+              "profile_acceleration": 0,
               "position_limits": {
                   "min": -1.5708,
                   "max": 1.22
@@ -64,9 +68,10 @@ maurice_arm:
               "pwm_limits": 885,
               "control_mode": 3,
               "pid_gains": {
-                  "kp": 500,
+                  "kp": 9900,
                   "ki": 0,
-                  "kd": 0
+                  "kd": 100,
+                  "ff1": 0
               }
           },
           "joint_3": {
@@ -76,22 +81,23 @@ maurice_arm:
                   "min": -1.5708,
                   "max": 1.7453
               },
-              "profile_velocity": 200,
-              "profile_acceleration": 50,
+              "profile_velocity": 0,
+              "profile_acceleration": 0,
               "pwm_limits": 885,
               "control_mode": 3,
               "pid_gains": {
-                  "kp": 0,
+                  "kp": 1500,
                   "ki": 0,
-                  "kd": 0,
-                  "ff1": 15000
+                  "kd": 200,
+                  "ff1": 1701,
+                  "ff2": 0
               }
           },
           "joint_4": {
               "servo_id": 4,
               "motor_type": "XC330-M288",
-              "profile_velocity": 200,
-              "profile_acceleration": 50,
+              "profile_velocity": 0,
+              "profile_acceleration": 0,
               "position_limits": {
                   "min": -1.9199,
                   "max": 1.7453
@@ -100,8 +106,9 @@ maurice_arm:
               "control_mode": 3,
               "pid_gains": {
                   "kp": 2000,
-                  "ki": 1000,
-                  "kd": 16000
+                  "ki": 0,
+                  "kd": 160,
+                  "ff1": 5000
               }
           },
           "joint_5": {
@@ -114,7 +121,7 @@ maurice_arm:
               "pwm_limits": 885,
               "control_mode": 3,
               "pid_gains": {
-                  "kp": 400,
+                  "kp": 2900,
                   "ki": 0,
                   "kd": 0
               }
@@ -170,13 +177,25 @@ maurice_arm:
           "enabled": false,
 
           "near": {
-              "joint_2": {"kp": 1500, "ki": 0, "kd": 2000},
-              "joint_3": {"kp": 1500, "ki": 0, "kd": 2000},
-              "joint_4": {"kp": 800,  "ki": 1000, "kd": 4000}
+              "joint_1": {"kp": 0, "ki": 0, "kd": 0}
           },
           "far": {
-              "joint_2": {"kp": 6000, "ki": 0, "kd": 12000},
-              "joint_3": {"kp": 8000, "ki": 0, "kd": 12000},
-              "joint_4": {"kp": 1500, "ki": 1000, "kd": 12000}
+              "joint_1": {"kp": 0, "ki": 0, "kd": 0, "ff1": 0, "ff2": 1}
           }
       }
+
+    #  {
+        #   "enabled": false,
+# 
+        #   "near": {
+            #   "joint_2": {"kp": 1500, "ki": 0, "kd": 2000},
+            #   "joint_3": {"kp": 1500, "ki": 0, "kd": 2000},
+            #   "joint_4": {"kp": 800,  "ki": 1000, "kd": 4000}
+        #   },
+        #   "far": {
+            #   "joint_2": {"kp": 6000, "ki": 0, "kd": 12000},
+            #   "joint_3": {"kp": 8000, "ki": 0, "kd": 12000},
+            #   "joint_4": {"kp": 1500, "ki": 1000, "kd": 12000}
+        #   }
+    #   }
+
