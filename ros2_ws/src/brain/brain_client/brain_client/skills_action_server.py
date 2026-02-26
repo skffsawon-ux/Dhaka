@@ -797,7 +797,7 @@ class SkillsActionServer(Node):
 
         # Create behavior goal with config from metadata
         behavior_goal = ExecuteBehavior.Goal()
-        behavior_goal.behavior_name = skill_type
+        behavior_goal.skill_dir = physical_data["directory"]
         behavior_goal.behavior_config = json.dumps(metadata)  # Pass entire metadata as config
 
         # Send goal and wait for result

@@ -84,16 +84,6 @@ class BehaviorServer(Node):
         # Use environment variable if set, otherwise construct from HOME
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
         
-        # Skill directories for loading checkpoints/data
-        self.primitives_directories = [
-            os.path.join(maurice_root, 'skills'),
-            os.path.join(os.path.expanduser('~'), 'skills'),
-        ]
-        # Preserve order while removing duplicates
-        self.primitives_directories = list(dict.fromkeys(self.primitives_directories))
-        for skills_dir in self.primitives_directories:
-            self.get_logger().info(f"Scanning behavior skill directory: {skills_dir}")
-        
         # Get data directory from recorder config
         default_data_dir = os.path.join(maurice_root, 'data')
         try:
@@ -160,50 +150,7 @@ class BehaviorServer(Node):
             cancel_callback=self.cancel_behavior_callback
         )
         
-        self.get_logger().info("Behavior server ready - pure execution engine using primitives/ directory")
-
-    def _resolve_behavior_directory(self, behavior_name, behavior_config):
-        """Resolve the on-disk directory for a behavior.
-
-        Resolution order:
-        1) Explicit directory field in behavior_config
-        2) <skills_dir>/<behavior_name> in configured roots
-        3) Scan metadata.json where metadata['name'] == behavior_name
-        """
-        explicit_dir = behavior_config.get('directory')
-        if explicit_dir:
-            explicit_dir = os.path.expanduser(explicit_dir)
-            if os.path.isdir(explicit_dir):
-                return explicit_dir
-            self.get_logger().warn(f"Configured behavior directory does not exist: {explicit_dir}")
-
-        for skills_dir in self.primitives_directories:
-            candidate = os.path.join(skills_dir, behavior_name)
-            if os.path.isdir(candidate):
-                return candidate
-
-        for skills_dir in self.primitives_directories:
-            if not os.path.isdir(skills_dir):
-                continue
-            try:
-                for item in os.listdir(skills_dir):
-                    candidate_dir = os.path.join(skills_dir, item)
-                    metadata_path = os.path.join(candidate_dir, 'metadata.json')
-                    if not os.path.isdir(candidate_dir) or not os.path.exists(metadata_path):
-                        continue
-                    try:
-                        with open(metadata_path, 'r') as f:
-                            metadata = json.load(f)
-                        if metadata.get('name') == behavior_name:
-                            return candidate_dir
-                    except Exception as e:
-                        self.get_logger().warn(
-                            f"Failed reading metadata for candidate skill {candidate_dir}: {e}"
-                        )
-            except Exception as e:
-                self.get_logger().warn(f"Failed to scan skills directory {skills_dir}: {e}")
-
-        return None
+        self.get_logger().info("Behavior server ready - pure execution engine using absolute skill directories")
     
     def cancel_behavior_callback(self, goal_handle_to_cancel):
         """Handle action cancel requests."""
@@ -219,13 +166,13 @@ class BehaviorServer(Node):
     
     def execute_behavior_callback(self, goal_handle):
         """Execute the requested behavior."""
-        behavior_name = goal_handle.request.behavior_name
+        skill_dir = goal_handle.request.skill_dir
         
         if self.execution_running:
             result = ExecuteBehavior.Result()
             result.success = False
             result.message = "Another behavior is already running"
-            self.get_logger().warn(f"Behavior {behavior_name} requested but already running")
+            self.get_logger().warn(f"Behavior {skill_dir} requested but already running")
             goal_handle.abort()
             return result
         
@@ -233,14 +180,14 @@ class BehaviorServer(Node):
         if not hasattr(goal_handle.request, 'behavior_config') or not goal_handle.request.behavior_config:
             result = ExecuteBehavior.Result()
             result.success = False
-            result.message = f"No behavior_config provided for behavior: {behavior_name}"
-            self.get_logger().error(f"No behavior_config provided for behavior: {behavior_name}")
+            result.message = f"No behavior_config provided for skill_dir: {skill_dir}"
+            self.get_logger().error(f"No behavior_config provided for skill_dir: {skill_dir}")
             goal_handle.abort()
             return result
         
         try:
             behavior_config = json.loads(goal_handle.request.behavior_config)
-            self.get_logger().info(f"Executing behavior: {behavior_name}")
+            self.get_logger().info(f"Executing behavior at skill_dir: {skill_dir}")
         except json.JSONDecodeError as e:
             self.get_logger().error(f"Failed to parse behavior_config JSON: {e}")
             result = ExecuteBehavior.Result()
@@ -253,55 +200,55 @@ class BehaviorServer(Node):
         self._cancel_requested.clear()
         
         # Execute the behavior
-        outcome, reason = self._execute_behavior(goal_handle, behavior_name, behavior_config)
+        outcome, reason = self._execute_behavior(goal_handle, skill_dir, behavior_config)
         
         # Set result based on outcome
         result = ExecuteBehavior.Result()
         
         if outcome == "SUCCESS":
             result.success = True
-            result.message = f"Behavior {behavior_name} completed successfully. {reason}"
+            result.message = f"Behavior {skill_dir} completed successfully. {reason}"
             goal_handle.succeed()
-            self.get_logger().info(f"Behavior {behavior_name} succeeded: {reason}")
+            self.get_logger().info(f"Behavior {skill_dir} succeeded: {reason}")
         elif outcome == "CANCELLED":
             result.success = False
-            result.message = f"Behavior {behavior_name} was cancelled. {reason}"
+            result.message = f"Behavior {skill_dir} was cancelled. {reason}"
             goal_handle.canceled()
-            self.get_logger().info(f"Behavior {behavior_name} was canceled: {reason}")
+            self.get_logger().info(f"Behavior {skill_dir} was canceled: {reason}")
         elif outcome == "FAILURE":
             result.success = False
-            result.message = f"Behavior {behavior_name} failed. {reason}"
+            result.message = f"Behavior {skill_dir} failed. {reason}"
             goal_handle.abort()
-            self.get_logger().error(f"Behavior {behavior_name} failed: {reason}")
+            self.get_logger().error(f"Behavior {skill_dir} failed: {reason}")
         else:
             result.success = False
-            result.message = f"Behavior {behavior_name} failed with unexpected outcome: {outcome}. {reason}"
+            result.message = f"Behavior {skill_dir} failed with unexpected outcome: {outcome}. {reason}"
             goal_handle.abort()
-            self.get_logger().error(f"Behavior {behavior_name} failed with unexpected outcome: {outcome}. {reason}")
+            self.get_logger().error(f"Behavior {skill_dir} failed with unexpected outcome: {outcome}. {reason}")
         
         return result
     
-    def _execute_behavior(self, goal_handle, behavior_name, behavior_config):
+    def _execute_behavior(self, goal_handle, skill_dir, behavior_config):
         """Execute a behavior based on its configuration."""
         try:
             self.current_goal_handle = goal_handle
             self.execution_running = True
             
             behavior_type = behavior_config.get('type', 'unknown')
-            self.get_logger().info(f"Executing {behavior_type} behavior: {behavior_name}")
+            self.get_logger().info(f"Executing {behavior_type} behavior at: {skill_dir}")
             
             if behavior_type == 'learned':
-                return self._execute_learned_behavior(goal_handle, behavior_name, behavior_config)
+                return self._execute_learned_behavior(goal_handle, skill_dir, behavior_config)
             elif behavior_type == 'poses':
-                return self._execute_poses_behavior(goal_handle, behavior_name, behavior_config)
+                return self._execute_poses_behavior(goal_handle, skill_dir, behavior_config)
             elif behavior_type == 'replay':
-                return self._execute_replay_behavior(goal_handle, behavior_name, behavior_config)
+                return self._execute_replay_behavior(goal_handle, skill_dir, behavior_config)
             else:
                 self.get_logger().error(f"Unknown behavior type: {behavior_type}")
                 return "FAILURE", f"Unknown behavior type: {behavior_type}"
                 
         except Exception as e:
-            self.get_logger().error(f"Error executing behavior {behavior_name}: {e}")
+            self.get_logger().error(f"Error executing behavior {skill_dir}: {e}")
             return "FAILURE", f"Exception during execution: {str(e)}"
         finally:
             # Clean up
@@ -311,23 +258,12 @@ class BehaviorServer(Node):
                 del self.current_policy
                 self.current_policy = None
     
-    def _execute_learned_behavior(self, goal_handle, behavior_name, behavior_config):
+    def _execute_learned_behavior(self, goal_handle, skill_dir, behavior_config):
         """Execute a learned behavior using ACT policy."""
         try:
-            primitive_dir = self._resolve_behavior_directory(behavior_name, behavior_config)
-            if not primitive_dir:
-                self.get_logger().error(f"Skill directory not found for behavior: {behavior_name}")
-                return "FAILURE", f"Skill directory not found for behavior: {behavior_name}"
-
+            behavior_name = os.path.basename(skill_dir.rstrip('/'))
             checkpoint_file = behavior_config['execution'].get('checkpoint')
-            if not checkpoint_file:
-                self.get_logger().error("Missing checkpoint in behavior execution config")
-                return "FAILURE", "Missing checkpoint in behavior execution config"
-            checkpoint_path = (
-                checkpoint_file
-                if os.path.isabs(checkpoint_file)
-                else os.path.join(primitive_dir, checkpoint_file)
-            )
+            checkpoint_path = os.path.join(skill_dir, checkpoint_file)
             action_dim = behavior_config['execution'].get('action_dim', 8)
             duration = behavior_config['execution'].get('duration', 20.0)
             progress_threshold = behavior_config['execution'].get('progress_threshold', 2.0)
@@ -486,7 +422,7 @@ class BehaviorServer(Node):
                 feedback_msg = ExecuteBehavior.Feedback()
                 feedback_msg.elapsed_time = float(elapsed_time)
                 feedback_msg.remaining_time = float(remaining_time)
-                feedback_msg.status = f"Executing {behavior_name}"
+                feedback_msg.status = f"Executing {behavior_name} ({skill_dir})"
                 goal_handle.publish_feedback(feedback_msg)
                 
                 # Maintain loop rate
@@ -553,8 +489,9 @@ class BehaviorServer(Node):
             self._stop_robot()
             return "FAILURE", f"Exception during execution: {str(e)}"
     
-    def _execute_poses_behavior(self, goal_handle, behavior_name, behavior_config):
+    def _execute_poses_behavior(self, goal_handle, skill_dir, behavior_config):
         """Execute a poses-based behavior."""
+        behavior_name = os.path.basename(skill_dir.rstrip('/'))
         self.get_logger().info(f"Executing poses behavior: {behavior_name}")
         
         poses = behavior_config['execution'].get('poses', [])
@@ -589,20 +526,13 @@ class BehaviorServer(Node):
             self.get_logger().error(f"Error in poses behavior execution: {e}")
             return "FAILURE", f"Exception during poses execution: {str(e)}"
     
-    def _execute_replay_behavior(self, goal_handle, behavior_name, behavior_config):
+    def _execute_replay_behavior(self, goal_handle, skill_dir, behavior_config):
         """Execute a replay-based behavior from H5 file."""
+        behavior_name = os.path.basename(skill_dir.rstrip('/'))
         self.get_logger().info(f"Executing replay behavior: {behavior_name}")
         
-        primitive_dir = self._resolve_behavior_directory(behavior_name, behavior_config)
-        if not primitive_dir:
-            self.get_logger().error(f"Skill directory not found for behavior: {behavior_name}")
-            return "FAILURE", f"Skill directory not found for behavior: {behavior_name}"
-
         replay_file = behavior_config['execution'].get('replay_file')
-        if not replay_file:
-            self.get_logger().error("Missing replay_file in behavior execution config")
-            return "FAILURE", "Missing replay_file in behavior execution config"
-        file_path = replay_file if os.path.isabs(replay_file) else os.path.join(primitive_dir, replay_file)
+        file_path = os.path.join(skill_dir, replay_file)
         start_pose = behavior_config['execution'].get('start_pose')
         end_pose = behavior_config['execution'].get('end_pose')
         start_pose_time = behavior_config['execution'].get('start_pose_time', 1)
