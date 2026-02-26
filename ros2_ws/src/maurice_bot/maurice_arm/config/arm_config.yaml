@@ -80,7 +80,7 @@
       pwm_limit: 885
       control_mode: 3
       profile_velocity: 100
-      profile_acceleration: 25
+      profile_acceleration: 50 
       gains_near: [2000, 0, 160, 0, 0]
       gains_teleop: [400, 400, 1000, 0, 0] # November teleop gains
 

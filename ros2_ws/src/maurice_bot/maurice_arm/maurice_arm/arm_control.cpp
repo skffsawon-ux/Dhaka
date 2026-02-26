@@ -109,6 +109,16 @@ void MauriceArmNode::controlTimerCallback() {
             std::vector<std::tuple<int, int, int, int, int, int>> gs_pid_data;
 
             if (gain_mode_ == GainMode::TELEOP) {
+                // On transition to TELEOP: zero out profile limits for instant response
+                if (last_applied_gain_mode_ != GainMode::TELEOP) {
+                    last_applied_gain_mode_ = GainMode::TELEOP;
+                    for (int i = 0; i < 6; i++) {
+                        dynamixel_->setProfileVelocity(joint_configs_[i].servo_id, 0);
+                        dynamixel_->setProfileAcceleration(joint_configs_[i].servo_id, 0);
+                    }
+                    RCLCPP_INFO(this->get_logger(), "TELEOP: profile velocity/acceleration set to 0 (unlimited) for joints 1-6");
+                }
+
                 // TELEOP: apply flat teleop gains for joints 1-6
                 for (int i = 0; i < 6; i++) {
                     const GainProfile& target = gs_teleop_[i];
@@ -137,6 +147,18 @@ void MauriceArmNode::controlTimerCallback() {
                         gs_teleop_[3].kp, gs_teleop_[3].ki, gs_teleop_[3].kd);
                 }
             } else {
+                // On transition to SCHEDULED: restore profile limits from config
+                if (last_applied_gain_mode_ != GainMode::SCHEDULED) {
+                    last_applied_gain_mode_ = GainMode::SCHEDULED;
+                    for (int i = 0; i < 6; i++) {
+                        if (joint_configs_[i].profile_velocity > 0)
+                            dynamixel_->setProfileVelocity(joint_configs_[i].servo_id, joint_configs_[i].profile_velocity);
+                        if (joint_configs_[i].profile_acceleration > 0)
+                            dynamixel_->setProfileAcceleration(joint_configs_[i].servo_id, joint_configs_[i].profile_acceleration);
+                    }
+                    RCLCPP_INFO(this->get_logger(), "SCHEDULED: profile velocity/acceleration restored from config");
+                }
+
                 // SCHEDULED: interpolate near/far by arm extension for joints 1-4
                 constexpr double L2_x = 0.02825, L2_z = 0.12125;
                 constexpr double L3_x = 0.1375,  L3_z = 0.0045;

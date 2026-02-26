@@ -187,6 +187,7 @@ public:
     std::array<GainProfile, 7> gs_last_applied_;
     int gs_cycle_counter_ = 0;
     GainMode gain_mode_{GainMode::SCHEDULED};
+    GainMode last_applied_gain_mode_{GainMode::SCHEDULED};
 
     // Control loop timing instrumentation
     std::array<TimingAccumulator, 10> timing_stats_{{
