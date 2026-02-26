@@ -30,14 +30,16 @@ help:
 	@echo "  make test    - Run integration tests in Docker"
 
 # One-liner to start simulation
-sim: up
-	@if docker compose -f $(COMPOSE_FILE) exec -T $(CONTAINER) tmux has-session -t $(TMUX_SESSION) 2>/dev/null; then \
-		echo "Attaching to existing simulation session..."; \
-		docker compose -f $(COMPOSE_FILE) exec $(CONTAINER) tmux attach -t $(TMUX_SESSION); \
-	else \
-		echo "Launching simulation nodes..."; \
-		docker compose -f $(COMPOSE_FILE) exec $(CONTAINER) zsh -lc './scripts/launch_sim_in_tmux.zsh && tmux attach -t $(TMUX_SESSION)'; \
-	fi
+sim: down
+	@echo "Cleaning host build artifacts..."
+	rm -rf ros2_ws/build ros2_ws/install ros2_ws/log
+	@echo "Starting containers..."
+	docker compose -f $(COMPOSE_FILE) up -d
+	@sleep 2
+	@echo "Building ROS2 workspace..."
+	docker compose -f $(COMPOSE_FILE) exec $(CONTAINER) zsh -lc 'source /opt/ros/humble/setup.zsh && cd ~/innate-os/ros2_ws && colcon build'
+	@echo "Launching simulation nodes..."
+	docker compose -f $(COMPOSE_FILE) exec $(CONTAINER) zsh -lc './scripts/launch_sim_in_tmux.zsh && tmux attach -t $(TMUX_SESSION)'
 
 # Build Docker image (clears build volumes to ensure fresh build)
 build: down
