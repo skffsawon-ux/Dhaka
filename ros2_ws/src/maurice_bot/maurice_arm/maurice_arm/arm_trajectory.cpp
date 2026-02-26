@@ -3,146 +3,6 @@
 
 namespace maurice_arm {
 
-// ========== MOVEIT PLANNING ==========
-
-std::pair<std::vector<std::vector<double>>, std::vector<double>>
-MauriceArmNode::planWithMoveIt(const std::vector<double>& start, const std::vector<double>& goal, double planning_time) {
-
-    if (!moveit_available_) {
-        RCLCPP_ERROR(this->get_logger(), "MoveIt is not available");
-        return {};
-    }
-
-    // Create motion plan request
-    auto request = std::make_shared<moveit_msgs::srv::GetMotionPlan::Request>();
-
-    // Set planning group and parameters
-    request->motion_plan_request.group_name = "arm";
-    request->motion_plan_request.num_planning_attempts = 3;
-    request->motion_plan_request.allowed_planning_time = planning_time;
-    request->motion_plan_request.planner_id = "RRTConnect";
-
-    // Set start state
-    request->motion_plan_request.start_state.joint_state.name = joint_names_;
-    request->motion_plan_request.start_state.joint_state.position = start;
-    request->motion_plan_request.start_state.is_diff = false;
-
-    // Set goal constraints (joint space goal)
-    moveit_msgs::msg::Constraints goal_constraint;
-    for (size_t i = 0; i < goal.size(); ++i) {
-        moveit_msgs::msg::JointConstraint jc;
-        jc.joint_name = joint_names_[i];
-        jc.position = goal[i];
-        jc.tolerance_above = 0.01;
-        jc.tolerance_below = 0.01;
-        jc.weight = 1.0;
-        goal_constraint.joint_constraints.push_back(jc);
-    }
-    request->motion_plan_request.goal_constraints.push_back(goal_constraint);
-
-    // Set workspace parameters
-    request->motion_plan_request.workspace_parameters.header.frame_id = "base_link";
-    request->motion_plan_request.workspace_parameters.min_corner.x = -1.0;
-    request->motion_plan_request.workspace_parameters.min_corner.y = -1.0;
-    request->motion_plan_request.workspace_parameters.min_corner.z = -0.5;
-    request->motion_plan_request.workspace_parameters.max_corner.x = 1.0;
-    request->motion_plan_request.workspace_parameters.max_corner.y = 1.0;
-    request->motion_plan_request.workspace_parameters.max_corner.z = 1.0;
-
-    // Call service
-    RCLCPP_INFO(this->get_logger(), "Calling MoveIt planning service...");
-    auto future = moveit_plan_client_->async_send_request(request);
-
-    // Wait for response
-    auto timeout = std::chrono::duration<double>(planning_time + 5.0);
-    if (future.wait_for(timeout) != std::future_status::ready) {
-        RCLCPP_ERROR(this->get_logger(), "MoveIt planning service call timed out");
-        return {};
-    }
-
-    auto response = future.get();
-
-    // Check if planning succeeded (error_code.val == 1 means SUCCESS)
-    if (response->motion_plan_response.error_code.val != 1) {
-        RCLCPP_ERROR(this->get_logger(), "MoveIt planning failed with error code %d",
-                    response->motion_plan_response.error_code.val);
-        return {};
-    }
-
-    // Extract trajectory waypoints and timing
-    auto& trajectory = response->motion_plan_response.trajectory.joint_trajectory;
-    std::vector<std::vector<double>> waypoints;
-    std::vector<double> time_from_start;
-
-    for (const auto& point : trajectory.points) {
-        waypoints.push_back(std::vector<double>(point.positions.begin(), point.positions.end()));
-        double time_sec = point.time_from_start.sec + point.time_from_start.nanosec * 1e-9;
-        time_from_start.push_back(time_sec);
-    }
-
-    RCLCPP_INFO(this->get_logger(), "MoveIt planning succeeded with %zu waypoints", waypoints.size());
-    return {waypoints, time_from_start};
-}
-
-// ========== TRAJECTORY INTERPOLATION ==========
-
-std::vector<std::vector<double>> MauriceArmNode::interpolateMoveItTrajectory(
-    const std::vector<std::vector<double>>& waypoints,
-    const std::vector<double>& time_from_start,
-    double dt) {
-
-    if (waypoints.empty() || time_from_start.empty()) {
-        return {};
-    }
-
-    std::vector<std::vector<double>> trajectory;
-    double total_duration = time_from_start.back();
-    double current_time = 0.0;
-
-    RCLCPP_INFO(this->get_logger(), "Interpolating trajectory: %zu waypoints, %.2f sec duration, %.3f sec timestep",
-                waypoints.size(), total_duration, dt);
-
-    while (current_time <= total_duration) {
-        // Find the two waypoints to interpolate between
-        size_t wp_idx = 0;
-        for (size_t i = 0; i < time_from_start.size() - 1; ++i) {
-            if (current_time <= time_from_start[i + 1]) {
-                wp_idx = i;
-                break;
-            }
-            wp_idx = i + 1;
-        }
-
-        if (wp_idx >= waypoints.size() - 1) {
-            trajectory.push_back(waypoints.back());
-            break;
-        }
-
-        // Linear interpolation between waypoints
-        double t1 = time_from_start[wp_idx];
-        double t2 = time_from_start[wp_idx + 1];
-
-        if (t2 > t1) {
-            double alpha = (current_time - t1) / (t2 - t1);
-            const auto& wp1 = waypoints[wp_idx];
-            const auto& wp2 = waypoints[wp_idx + 1];
-
-            std::vector<double> interpolated(wp1.size());
-            for (size_t j = 0; j < wp1.size(); ++j) {
-                interpolated[j] = wp1[j] + alpha * (wp2[j] - wp1[j]);
-            }
-            trajectory.push_back(interpolated);
-        } else {
-            trajectory.push_back(waypoints[wp_idx]);
-        }
-
-        current_time += dt;
-    }
-
-    RCLCPP_INFO(this->get_logger(), "Interpolation complete: %zu trajectory points", trajectory.size());
-    return trajectory;
-}
-
 // ========== CUBIC SPLINE (QUINTIC SMOOTHERSTEP) ==========
 
 std::vector<std::vector<double>> MauriceArmNode::computeCubicSplineTrajectory(
@@ -196,11 +56,13 @@ std::vector<std::vector<double>> MauriceArmNode::computeCubicSplineTrajectory(
 
 // ========== PLAN AND EXECUTE ==========
 
-bool MauriceArmNode::planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time) {
-    // Switch to scheduled gains for planned trajectories
-    if (gain_mode_ != GainMode::SCHEDULED) {
-        gain_mode_ = GainMode::SCHEDULED;
-        RCLCPP_INFO(this->get_logger(), "Gain mode -> SCHEDULED (trajectory execution)");
+bool MauriceArmNode::planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time,
+                                               GainMode trajectory_gain_mode) {
+    // Switch gains for trajectory execution
+    if (gain_mode_ != trajectory_gain_mode) {
+        gain_mode_ = trajectory_gain_mode;
+        RCLCPP_INFO(this->get_logger(), "Gain mode -> %s (trajectory execution)",
+                    trajectory_gain_mode == GainMode::TELEOP ? "TELEOP" : "SCHEDULED");
     }
 
     // Validate inputs - 6 joints (arm + gripper)
@@ -406,7 +268,7 @@ void MauriceArmNode::armGotoJSCallback(
     const std::shared_ptr<maurice_msgs::srv::GotoJS::Request> request,
     std::shared_ptr<maurice_msgs::srv::GotoJS::Response> response) {
 
-    RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/goto_js");
+    RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/goto_js (TELEOP gains)");
 
     // Extract target positions and time from request
     std::vector<double> target_positions(request->data.data.begin(), request->data.data.end());
@@ -421,13 +283,42 @@ void MauriceArmNode::armGotoJSCallback(
                 target_positions.size() > 5 ? target_positions[5] : 0.0,
                 trajectory_time);
 
-    // Call internal planning function (6 joints including gripper)
-    response->success = planAndExecuteTrajectory(target_positions, trajectory_time);
+    // goto_js uses teleop gains (flat, no extension-based interpolation)
+    response->success = planAndExecuteTrajectory(target_positions, trajectory_time, GainMode::TELEOP);
 
     if (response->success) {
         RCLCPP_INFO(this->get_logger(), "Successfully planned trajectory");
     } else {
         RCLCPP_ERROR(this->get_logger(), "Failed to plan trajectory");
+    }
+}
+
+void MauriceArmNode::armGotoJSV2Callback(
+    const std::shared_ptr<maurice_msgs::srv::GotoJS::Request> request,
+    std::shared_ptr<maurice_msgs::srv::GotoJS::Response> response) {
+
+    RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/goto_js_v2 (SCHEDULED gains)");
+
+    // Extract target positions and time from request
+    std::vector<double> target_positions(request->data.data.begin(), request->data.data.end());
+    double trajectory_time = request->time;
+
+    RCLCPP_INFO(this->get_logger(), "Target (6 DOF): [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f], Time: %.2fs",
+                target_positions.size() > 0 ? target_positions[0] : 0.0,
+                target_positions.size() > 1 ? target_positions[1] : 0.0,
+                target_positions.size() > 2 ? target_positions[2] : 0.0,
+                target_positions.size() > 3 ? target_positions[3] : 0.0,
+                target_positions.size() > 4 ? target_positions[4] : 0.0,
+                target_positions.size() > 5 ? target_positions[5] : 0.0,
+                trajectory_time);
+
+    // goto_js_v2 uses scheduled gains (near/far interpolated by extension)
+    response->success = planAndExecuteTrajectory(target_positions, trajectory_time, GainMode::SCHEDULED);
+
+    if (response->success) {
+        RCLCPP_INFO(this->get_logger(), "Successfully planned trajectory (v2)");
+    } else {
+        RCLCPP_ERROR(this->get_logger(), "Failed to plan trajectory (v2)");
     }
 }
 

@@ -16,10 +16,20 @@ MauriceArmNode::MauriceArmNode() : Node("maurice_arm") {
     this->declare_parameter("control_frequency", 100.0);
     this->declare_parameter("trajectory_rate_hz", 30.0);
     this->declare_parameter("max_jerk", 0.0);  // rad/s³, 0 = disabled
+    this->declare_parameter("stress_enabled", false);      // enable/disable leaky integrator
+    this->declare_parameter("stress_threshold", 100.0);     // score to trigger cooldown
+    this->declare_parameter("stress_cooldown_sec", 2.0);    // seconds to rest
+    this->declare_parameter("stress_multiplier", 1.0);      // A in leaky integrator: A*|PWM| - C
+    this->declare_parameter("stress_leak", 0.0);             // C in leaky integrator: A*|PWM| - C
     this->declare_parameter("joints", std::vector<std::string>{});
 
     int baud_rate = this->get_parameter("baud_rate").as_int();
     control_frequency_ = this->get_parameter("control_frequency").as_double();
+    stress_enabled_ = this->get_parameter("stress_enabled").as_bool();
+    stress_threshold_ = this->get_parameter("stress_threshold").as_double();
+    stress_cooldown_sec_ = this->get_parameter("stress_cooldown_sec").as_double();
+    stress_multiplier_ = this->get_parameter("stress_multiplier").as_double();
+    stress_leak_ = this->get_parameter("stress_leak").as_double();
     auto joint_names_param = this->get_parameter("joints").as_string_array();
 
     // Load joint configurations from sub-parameters (nav2 style)
@@ -79,22 +89,15 @@ MauriceArmNode::MauriceArmNode() : Node("maurice_arm") {
         std::bind(&MauriceArmNode::armGotoJSCallback, this, std::placeholders::_1, std::placeholders::_2),
         rmw_qos_profile_services_default, service_callback_group_);
 
+    arm_goto_js_v2_service_ = this->create_service<maurice_msgs::srv::GotoJS>(
+        "/mars/arm/goto_js_v2",
+        std::bind(&MauriceArmNode::armGotoJSV2Callback, this, std::placeholders::_1, std::placeholders::_2),
+        rmw_qos_profile_services_default, service_callback_group_);
+
     arm_goto_js_traj_service_ = this->create_service<maurice_msgs::srv::GotoJSTrajectory>(
         "/mars/arm/goto_js_trajectory",
         std::bind(&MauriceArmNode::armGotoJSTrajectoryCallback, this, std::placeholders::_1, std::placeholders::_2),
         rmw_qos_profile_services_default, service_callback_group_);
-
-    // MoveIt planning service client
-    moveit_plan_client_ = this->create_client<moveit_msgs::srv::GetMotionPlan>("/plan_kinematic_path");
-
-    RCLCPP_INFO(this->get_logger(), "Waiting for MoveIt planning service...");
-    if (moveit_plan_client_->wait_for_service(std::chrono::seconds(5))) {
-        RCLCPP_INFO(this->get_logger(), "MoveIt planning service is available");
-        moveit_available_ = true;
-    } else {
-        RCLCPP_WARN(this->get_logger(), "MoveIt planning service not available - goto_js will fail");
-        moveit_available_ = false;
-    }
 
     // ── HEAD publishers / subscribers / services ──
     RCLCPP_INFO(this->get_logger(), "Setting up HEAD publishers/subscribers/services");
@@ -151,19 +154,12 @@ MauriceArmNode::MauriceArmNode() : Node("maurice_arm") {
 
     RCLCPP_INFO(this->get_logger(), "Maurice Arm Node ready!");
 
-    // Wait a bit for MoveIt to be ready, then go to home position
-    RCLCPP_INFO(this->get_logger(), "Waiting 3 seconds for MoveIt to initialize...");
-    std::this_thread::sleep_for(std::chrono::seconds(3));
-
-    if (moveit_available_) {
-        RCLCPP_INFO(this->get_logger(), "Moving to home position...");
-        if (planAndExecuteTrajectory(home_position_, 5.0)) {
-            RCLCPP_INFO(this->get_logger(), "Reached home position");
-        } else {
-            RCLCPP_WARN(this->get_logger(), "Failed to reach home position");
-        }
+    // Go to home position on startup
+    RCLCPP_INFO(this->get_logger(), "Moving to home position...");
+    if (planAndExecuteTrajectory(home_position_, 5.0)) {
+        RCLCPP_INFO(this->get_logger(), "Reached home position");
     } else {
-        RCLCPP_WARN(this->get_logger(), "MoveIt not available, skipping home position");
+        RCLCPP_WARN(this->get_logger(), "Failed to reach home position");
     }
 }
 

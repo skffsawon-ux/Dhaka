@@ -14,18 +14,10 @@
 #include "maurice_msgs/srv/goto_js.hpp"
 #include "maurice_msgs/srv/goto_js_trajectory.hpp"
 #include "maurice_msgs/msg/arm_status.hpp"
-#include <moveit_msgs/srv/get_motion_plan.hpp>
-#include <moveit_msgs/msg/motion_plan_request.hpp>
-#include <moveit_msgs/msg/robot_state.hpp>
-#include <moveit_msgs/msg/constraints.hpp>
-#include <moveit_msgs/msg/joint_constraint.hpp>
-#include <moveit_msgs/msg/workspace_parameters.hpp>
-#include <geometry_msgs/msg/pose.hpp>
 #include <cmath>
 #include <chrono>
 #include <nlohmann/json.hpp>
 #include <thread>
-#include <future>
 #include <sstream>
 #include <iomanip>
 #include <cstdint>
@@ -59,6 +51,9 @@ public:
     void recordLoopTiming(std::array<std::chrono::steady_clock::time_point, 9>& ts);
     std::vector<int> applyLimitsAndConvertToEncoder(std::vector<double>& command_data);
 
+    // ── Motor stress protection (arm_control.cpp) ───────────────────────
+    void updateMotorStress(double dt, const std::vector<int>& loads);
+
     // ── Service & topic callbacks (arm_services.cpp) ────────────────────
     void armCommandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
     void armTorqueOnCallback(
@@ -91,22 +86,20 @@ public:
         std::shared_ptr<std_srvs::srv::SetBool::Response> response);
 
     // ── Trajectory planning & execution (arm_trajectory.cpp) ────────────
-    std::pair<std::vector<std::vector<double>>, std::vector<double>>
-    planWithMoveIt(const std::vector<double>& start, const std::vector<double>& goal, double planning_time);
-    std::vector<std::vector<double>> interpolateMoveItTrajectory(
-        const std::vector<std::vector<double>>& waypoints,
-        const std::vector<double>& time_from_start,
-        double dt);
     std::vector<std::vector<double>> computeCubicSplineTrajectory(
         const std::vector<double>& start,
         const std::vector<double>& goal,
         double duration,
         double dt);
-    bool planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time);
+    bool planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time,
+                                   GainMode trajectory_gain_mode = GainMode::SCHEDULED);
     bool planAndExecuteMultiWaypointTrajectory(
         const std::vector<std::vector<double>>& waypoints,
         const std::vector<double>& segment_durations);
     void armGotoJSCallback(
+        const std::shared_ptr<maurice_msgs::srv::GotoJS::Request> request,
+        std::shared_ptr<maurice_msgs::srv::GotoJS::Response> response);
+    void armGotoJSV2Callback(
         const std::shared_ptr<maurice_msgs::srv::GotoJS::Request> request,
         std::shared_ptr<maurice_msgs::srv::GotoJS::Response> response);
     void armGotoJSTrajectoryCallback(
@@ -128,6 +121,7 @@ public:
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_reboot_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_fix_error_service_;
     rclcpp::Service<maurice_msgs::srv::GotoJS>::SharedPtr arm_goto_js_service_;
+    rclcpp::Service<maurice_msgs::srv::GotoJS>::SharedPtr arm_goto_js_v2_service_;
     rclcpp::Service<maurice_msgs::srv::GotoJSTrajectory>::SharedPtr arm_goto_js_traj_service_;
     sensor_msgs::msg::JointState arm_state_msg_;   // 6-joint message for /mars/arm/state
     sensor_msgs::msg::JointState joint_state_msg_;  // 7-joint message for /joint_states
@@ -143,9 +137,7 @@ public:
     std::vector<double> latest_joint_positions_;
     std::mutex joint_state_mutex_;
 
-    // MoveIt planning (6 DOF arm including gripper joint6)
-    rclcpp::Client<moveit_msgs::srv::GetMotionPlan>::SharedPtr moveit_plan_client_;
-    bool moveit_available_{false};
+    // Joint names and home position
     std::vector<std::string> joint_names_{"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
     std::vector<double> home_position_;
 
@@ -188,6 +180,15 @@ public:
     int gs_cycle_counter_ = 0;
     GainMode gain_mode_{GainMode::SCHEDULED};
     GainMode last_applied_gain_mode_{GainMode::SCHEDULED};
+
+    // Motor stress protection (overload cooldown)
+    // Leaky integrator: score += (A * |PWM| - C) * dt, clamped >= 0
+    std::array<MotorStressTracker, 7> stress_trackers_;
+    bool stress_enabled_{false};              // master enable for leaky integrator
+    double stress_threshold_{100.0};      // score at which cooldown triggers
+    double stress_cooldown_sec_{2.0};     // how long to rest (seconds)
+    double stress_multiplier_{1.0};       // A: multiplier on |load|
+    double stress_leak_{0.0};             // C: constant leak rate
 
     // Control loop timing instrumentation
     std::array<TimingAccumulator, 10> timing_stats_{{
