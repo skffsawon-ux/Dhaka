@@ -349,8 +349,14 @@ class BrainClientNode(Node):
         )
 
         # Subscribe to the map topic
+        map_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+        )
         self.map_sub = self.create_subscription(
-            OccupancyGrid, self.map_topic, self.map_callback, 1
+            OccupancyGrid, self.map_topic, self.map_callback, map_qos
         )
 
         # Optionally subscribe to the depth image topic if required.
@@ -1243,7 +1249,6 @@ class BrainClientNode(Node):
         try:
             # self.get_logger().info(f"\033[1;92m[BrainClient] Received image_callback\033[0m")
             np_arr = np.frombuffer(msg.data, np.uint8)
-            # self.last_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             decoded_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             if decoded_image is not None:
                 self.last_image = decoded_image  # Keep updating for other uses (e.g. pose_image_callback)
