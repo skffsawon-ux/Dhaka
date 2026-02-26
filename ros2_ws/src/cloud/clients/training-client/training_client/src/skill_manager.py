@@ -159,7 +159,6 @@ class SkillManager:
     def submit(
         self,
         source_dir: str | Path,
-        name: str | None = None,
     ) -> Generator[ProgressUpdate, None, SkillInfo]:
         """
         Create a skill (or reuse one from metadata.json).
@@ -173,14 +172,14 @@ class SkillManager:
         ----------
         source_dir
             Skill directory.  ``metadata.json`` will be updated here.
-        name
-            Skill name.  Defaults to the directory name.
         """
         source_dir = Path(source_dir).resolve()
         if not source_dir.is_dir():
             raise FileNotFoundError(f"Source directory does not exist: {source_dir}")
 
-        skill_name = name or source_dir.name
+        with _locked_metadata(source_dir) as meta_path:
+            metadata = _read_meta(meta_path)
+        skill_name = str(metadata.get("name") or "").strip() or source_dir.name
 
         # ── Create or reuse skill ───────────────────────────────────
         existing_id = read_skill_id(source_dir)

@@ -180,14 +180,12 @@ def cli() -> None:
 
 @cli.command()
 @click.argument("skill_dir")
-@click.option("--name", default="", help="Skill name (defaults to directory name).")
-def submit(skill_dir: str, name: str) -> None:
+def submit(skill_dir: str) -> None:
     """Create a skill on the server from a local directory."""
     node = _make_node()
     try:
         req = SubmitSkill.Request()
         req.skill_dir = skill_dir
-        req.name = name
         res = _call_service(node, SubmitSkill, "submit_skill", req)
         if res is None:
             click.secho("✗ No response (timeout?)", fg="red")

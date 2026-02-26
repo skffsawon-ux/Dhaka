@@ -244,7 +244,7 @@ class TrainingNode(Node):
             return res
 
         try:
-            gen = self._mgr.submit(req.skill_dir, name=req.name or None)
+            gen = self._mgr.submit(req.skill_dir)
             skill: SkillInfo | None = None
             try:
                 while True:
