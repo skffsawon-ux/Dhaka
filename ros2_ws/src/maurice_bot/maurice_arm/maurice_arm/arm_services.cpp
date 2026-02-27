@@ -132,7 +132,8 @@ void MauriceArmNode::syncTargetToMotorPositions() {
         }
         has_target_ = false;
     }
-    latest_arm_command_ = std::vector<int>(positions.begin(), positions.begin() + 6);
+        latest_arm_command_ = std::vector<int>(positions.begin(), positions.begin() + 6);
+    }
 }
 
 // ========== HEALTH MONITORING ==========
