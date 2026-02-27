@@ -60,7 +60,7 @@ def get_node_state(service_clients: dict, logger, node_name: str) -> int:
         logger,
         f'/{node_name}/get_state',
         get_state_request,
-        timeout_sec=5.0
+        timeout_sec=10.0
     )
     
     if get_state_result is None:
@@ -80,7 +80,7 @@ def send_lifecycle_transition(service_clients: dict, logger, node_name: str, tra
         logger,
         f'/{node_name}/change_state',
         change_state_request,
-        timeout_sec=10.0
+        timeout_sec=17.0
     )
     
     return result is not None and result.success

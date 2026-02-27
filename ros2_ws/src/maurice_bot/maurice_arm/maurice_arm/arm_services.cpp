@@ -118,6 +118,23 @@ void MauriceArmNode::configureServosLocked(bool enable_torque) {
     }
 }
 
+// ========== POSITION SYNC HELPER ==========
+
+void MauriceArmNode::syncTargetToMotorPositions() {
+    auto [positions, velocities, loads] = robot_->readState();
+    (void)velocities; (void)loads;
+    {
+        std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
+        for (int i = 0; i < 6 && i < static_cast<int>(positions.size()); ++i) {
+            double rad = ((positions[i] - 2048) * 2 * M_PI) / 4096.0;
+            if (i == 1 || i == 2 || i == 3 || i == 5) rad = -rad;
+            latest_target_[i] = rad;
+        }
+        has_target_ = false;
+        latest_arm_command_ = std::vector<int>(positions.begin(), positions.begin() + 6);
+    }
+}
+
 // ========== HEALTH MONITORING ==========
 
 void MauriceArmNode::healthMonitorCallback() {
@@ -234,6 +251,11 @@ void MauriceArmNode::armTorqueOnCallback(
             dynamixel_->enableTorque(id);
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+        try { syncTargetToMotorPositions(); }
+        catch (const std::exception& e) {
+            RCLCPP_WARN(this->get_logger(), "Failed to sync on torque on: %s", e.what());
+        }
+
         arm_torque_enabled_ = true;
         response->success = true;
         response->message = "Enabled torque for all arm servos";

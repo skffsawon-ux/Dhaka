@@ -129,9 +129,8 @@ MauriceArmNode::MauriceArmNode() : Node("maurice_arm") {
     RCLCPP_INFO(this->get_logger(), "Initializing command buffers with current positions");
     auto [initial_positions, initial_velocities, initial_loads] = robot_->readState();
     (void)initial_loads;
-    latest_arm_command_ = std::vector<int>(initial_positions.begin(), initial_positions.begin() + 6);
     latest_head_command_ = initial_positions[6];
-    RCLCPP_INFO(this->get_logger(), "Command buffers initialized (arm: 6 joints, head: 1 joint)");
+    syncTargetToMotorPositions();
 
     // ── Timers ──
     RCLCPP_INFO(this->get_logger(), "Creating control timer at %.1f Hz", control_frequency_);
