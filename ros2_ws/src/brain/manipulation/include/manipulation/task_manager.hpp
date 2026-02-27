@@ -36,6 +36,7 @@ public:
 
     // Accessors
     const std::string& get_current_task_name() const { return current_task_name_; }
+    const std::string& get_current_task_dir() const { return current_task_dir_; }
     const nlohmann::json& get_metadata() const { return metadata_; }
     bool has_metadata() const { return !metadata_.is_null(); }
     int get_number_of_episodes() const;
@@ -44,6 +45,7 @@ private:
     void save_metadata();
     void load_metadata();
     void create_primitive_metadata(const std::string& task_name, const std::string& primitive_type);
+    std::string skill_id_for_directory(const std::string& task_directory) const;
     std::optional<nlohmann::json> get_enriched_metadata_for_task(const std::string& task_directory, 
                                                                    std::string& error_msg);
 

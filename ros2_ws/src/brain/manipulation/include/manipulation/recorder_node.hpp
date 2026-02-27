@@ -108,10 +108,13 @@ private:
     // Helper methods
     void check_all_topics_received();
     void publish_status(const std::string& status, const std::string& episode_number = "", 
-                        const std::string& current_task_name = "");
+                        const std::string& skill_id = "");
     void set_head_ai_position();
     std::string state_to_string(State state);
     std::string replay_state_to_string(ReplayState state);
+    std::string resolve_skill_directory(const std::string& skill_id) const;
+    bool validate_skill_id(const std::string& skill_id) const;
+    std::string normalize_skill_name_from_display(const std::string& name) const;
 
     // Replay helpers
     void start_replay_timer();
@@ -137,6 +140,7 @@ private:
     std::chrono::steady_clock::time_point episode_start_time_;
     std::chrono::system_clock::time_point episode_start_system_time_;
     std::string current_task_name_;
+    std::string current_skill_id_;
     int episode_count_;
 
     // Sensor data
@@ -184,7 +188,7 @@ private:
     int replay_frame_index_;
     int replay_total_frames_;
     double replay_fps_;
-    std::string replay_task_name_;
+    std::string replay_skill_id_;
     std::string replay_episode_id_;
     rclcpp::TimerBase::SharedPtr replay_timer_;
 

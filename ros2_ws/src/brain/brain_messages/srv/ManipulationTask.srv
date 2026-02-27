@@ -1,8 +1,8 @@
 # brain_messages/srv/ManipulationTask.srv
 
 # Request
-string task_name
-string task_directory  # Full path to skill directory (e.g., ~/innate-os/skills/my_skill or ~/skills/my_skill)
+string skill_id        # Skill ID (e.g., local/pick-socks or innate/wave)
+string name            # Optional display name; defaults to skill_name from skill_id
 string task_description
 bool mobile_task
 ---

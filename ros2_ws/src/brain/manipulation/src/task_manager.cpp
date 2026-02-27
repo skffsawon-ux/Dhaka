@@ -167,11 +167,42 @@ void TaskManager::create_primitive_metadata(const std::string& task_name, const 
     std::cout << "Created primitive metadata.json for '" << task_name << "' (type: " << primitive_type << ")" << std::endl;
 }
 
+std::string TaskManager::skill_id_for_directory(const std::string& task_directory) const {
+    fs::path task_path(task_directory);
+    std::string skill_name = task_path.filename().string();
+    fs::path canonical_task_path = fs::weakly_canonical(task_path);
+
+    try {
+        fs::path local_root = fs::weakly_canonical(base_data_directory_);
+        std::string canonical_task = canonical_task_path.string();
+        std::string canonical_local_root = local_root.string();
+        if (canonical_task.rfind(canonical_local_root + "/", 0) == 0) {
+            return "local/" + skill_name;
+        }
+    } catch (...) {
+    }
+
+    for (const auto& dir : additional_skill_directories_) {
+        try {
+            fs::path root = fs::weakly_canonical(dir);
+            std::string canonical_task = canonical_task_path.string();
+            std::string canonical_root = root.string();
+            if (canonical_task.rfind(canonical_root + "/", 0) == 0) {
+                return "innate/" + skill_name;
+            }
+        } catch (...) {
+        }
+    }
+
+    return skill_name;
+}
+
 std::optional<nlohmann::json> TaskManager::get_enriched_metadata_for_task(const std::string& task_directory,
                                                                             std::string& error_msg) {
     std::string data_dir = task_directory + "/data";
     std::string metadata_file_path = data_dir + "/dataset_metadata.json";
     std::string task_name = fs::path(task_directory).filename().string();
+    std::string skill_id = skill_id_for_directory(task_directory);
 
     if (!fs::exists(task_directory) || !fs::is_directory(task_directory)) {
         error_msg = "Task directory " + task_directory + " not found or is not a directory.";
@@ -228,6 +259,7 @@ std::optional<nlohmann::json> TaskManager::get_enriched_metadata_for_task(const 
     }
 
     nlohmann::json enriched_metadata = {
+        {"skill_id", skill_id},
         {"task_name", task_name},
         {"task_directory", task_directory},
         {"data_frequency", dataset_metadata.value("data_frequency", 0)},
