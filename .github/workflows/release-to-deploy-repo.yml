@@ -63,7 +63,7 @@ jobs:
           git push release HEAD:main --force
           
             # For staging tags, skip tagging the release repo but still sync main
-            if [[ "$TAG" == *-staging ]]; then
+            if [[ "$TAG" =~ -rc[0-9]+$ ]]; then
               echo "Staging tag detected ($TAG): skipping remote tag update"
               {
                 echo "### Release to Deploy Repo"
@@ -91,7 +91,7 @@ jobs:
           echo "✓ Released $TAG to ${{ env.RELEASE_REPO }}"
 
       - name: Create GitHub Release (optional)
-        if: ${{ !endsWith(steps.tag.outputs.tag, '-staging') }}
+        if: ${{ !contains(steps.tag.outputs.tag, '-rc') }}
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
