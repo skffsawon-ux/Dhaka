@@ -1046,6 +1046,10 @@ class BrainClientNode(Node):
             }
         else:
             # No map available in non-mapfree mode
+            self.get_logger().warn(
+                f"[NavPayload] No map data. use_mapfree={use_mapfree}, last_map={self.last_map is not None}, "
+                f"nav_mode={self.cur_nav_mode}"
+            )
             return None
 
         # Add robot_coords
