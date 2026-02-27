@@ -45,6 +45,7 @@ public:
     void retryServoOp(int servo_id, const char* op_name, Func&& fn, int max_retries = 3);
     void configureServoByIdLocked(int servo_id, bool enable_torque = true);
     void configureServosLocked(bool enable_torque = true);
+    void syncTargetToMotorPositions();
 
     // ── Control loop (arm_control.cpp) ──────────────────────────────────
     void controlTimerCallback();
@@ -178,8 +179,8 @@ public:
     std::array<GainProfile, 7> gs_teleop_;
     std::array<GainProfile, 7> gs_last_applied_;
     int gs_cycle_counter_ = 0;
-    GainMode gain_mode_{GainMode::SCHEDULED};
-    GainMode last_applied_gain_mode_{GainMode::SCHEDULED};
+    GainMode gain_mode_{GainMode::TELEOP};
+    GainMode last_applied_gain_mode_{GainMode::TELEOP};
 
     // Motor stress protection (overload cooldown)
     // Leaky integrator: score += (A * |PWM| - C) * dt, clamped >= 0

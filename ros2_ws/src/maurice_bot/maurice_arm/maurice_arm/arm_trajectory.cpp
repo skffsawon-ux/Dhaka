@@ -135,6 +135,13 @@ bool MauriceArmNode::planAndExecuteTrajectory(const std::vector<double>& target_
     }
 
     RCLCPP_INFO(this->get_logger(), "Trajectory execution complete");
+
+    // Restore teleop gains after trajectory completes
+    if (gain_mode_ != GainMode::TELEOP) {
+        gain_mode_ = GainMode::TELEOP;
+        RCLCPP_INFO(this->get_logger(), "Gain mode -> TELEOP (trajectory finished)");
+    }
+
     return true;
 }
 
@@ -215,6 +222,13 @@ bool MauriceArmNode::planAndExecuteMultiWaypointTrajectory(
     }
 
     RCLCPP_INFO(this->get_logger(), "Multi-waypoint trajectory execution complete");
+
+    // Restore teleop gains after trajectory completes
+    if (gain_mode_ != GainMode::TELEOP) {
+        gain_mode_ = GainMode::TELEOP;
+        RCLCPP_INFO(this->get_logger(), "Gain mode -> TELEOP (multi-waypoint trajectory finished)");
+    }
+
     return true;
 }
 
