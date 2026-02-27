@@ -125,7 +125,7 @@ class ServiceManager:
 
     def is_discovery_running(self) -> bool:
         """Check if discovery server is running."""
-        if self._systemd_service_active("discovery-server.service"):
+        if self._systemd_service_active("zenoh-router.service"):
             return True
         return self._tmux_session_exists(self.DISCOVERY_SESSION)
 
@@ -262,7 +262,7 @@ class ServiceManager:
             "ros_running": self.is_running(),
             "discovery_running": self.is_discovery_running(),
             "discovery_systemd": self._systemd_service_active(
-                "discovery-server.service"
+                "zenoh-router.service"
             ),
             "update_running": self.is_update_running(),
         }
@@ -741,13 +741,13 @@ class UpdateManager:
 
         if svc_status["discovery_running"]:
             if svc_status["discovery_systemd"]:
-                print(f"  {Colors.GREEN}●{Colors.NC} Discovery: running (systemd)")
+                print(f"  {Colors.GREEN}●{Colors.NC} Zenoh: running (systemd)")
             else:
                 print(
-                    f"  {Colors.GREEN}●{Colors.NC} Discovery: running (tmux session 'discovery')"
+                    f"  {Colors.GREEN}●{Colors.NC} Zenoh: running (tmux session 'discovery')"
                 )
         else:
-            print(f"  {Colors.RED}○{Colors.NC} Discovery: stopped")
+            print(f"  {Colors.RED}○{Colors.NC} Zenoh: stopped")
 
         if svc_status["update_running"]:
             print(
