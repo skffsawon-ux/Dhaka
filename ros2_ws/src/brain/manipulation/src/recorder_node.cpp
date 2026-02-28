@@ -634,22 +634,6 @@ void RecorderNode::handle_end_task(
     episode_count_ = 0;
     response->success = true;
     response->message = "Task ended.";
-
-    // Trigger skills reload so new skill appears in skills_action_server
-    if (reload_skills_client_->service_is_ready()) {
-        auto reload_request = std::make_shared<std_srvs::srv::Trigger::Request>();
-        reload_skills_client_->async_send_request(reload_request,
-            [this](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
-                auto result = future.get();
-                if (result->success) {
-                    RCLCPP_INFO(this->get_logger(), "Skills reloaded successfully.");
-                } else {
-                    RCLCPP_WARN(this->get_logger(), "Failed to reload skills: %s", result->message.c_str());
-                }
-            });
-    } else {
-        RCLCPP_WARN(this->get_logger(), "Reload skills service not available; skills may need manual reload.");
-    }
 }
 
 
@@ -1063,7 +1047,7 @@ void RecorderNode::publish_replay_status() {
     msg.current_time_sec = replay_fps_ > 0 ? static_cast<float>(replay_frame_index_) / replay_fps_ : 0.0f;
     msg.total_time_sec = replay_fps_ > 0 ? static_cast<float>(replay_total_frames_) / replay_fps_ : 0.0f;
     msg.episode_id = replay_episode_id_;
-    msg.task_directory = task_manager_.get_current_task_dir();
+    msg.task_directory = task_manager_->get_current_task_dir();
     replay_status_pub_->publish(msg);
 }
 
