@@ -79,6 +79,19 @@ def _get_gaze_tracker_class():
     return ROSPersonTracker
 
 
+class _MockPrimitive:
+    """Lightweight stand-in used by BrainClient to hold skill metadata."""
+
+    def __init__(self, meta: dict):
+        self.metadata = meta
+
+    def guidelines(self):
+        return self.metadata.get("guidelines", "")
+
+    def guidelines_when_running(self):
+        return self.metadata.get("guidelines_when_running", "")
+
+
 class BrainClientNode(Node):
     def __init__(self):
         super().__init__("brain_client_node")
@@ -673,17 +686,12 @@ class BrainClientNode(Node):
             }
             primitives_list.append(metadata)
 
-            class MockPrimitive:
-                def __init__(self, meta):
-                    self.metadata = meta
-
-                def guidelines(self):
-                    return self.metadata.get("guidelines", "")
-
-                def guidelines_when_running(self):
-                    return self.metadata.get("guidelines_when_running", "")
-
-            primitives_dict[skill_info.id] = MockPrimitive(metadata)
+            primitives_dict[skill_info.id] = _MockPrimitive(metadata)
+            if skill_info.name in name_to_id:
+                self.get_logger().warn(
+                    f"Duplicate skill name '{skill_info.name}': "
+                    f"ID '{name_to_id[skill_info.name]}' overwritten by '{skill_info.id}'"
+                )
             name_to_id[skill_info.name] = skill_info.id
             id_to_name[skill_info.id] = skill_info.name
 
@@ -1563,14 +1571,23 @@ class BrainClientNode(Node):
         primitive_name: str,
         primitive_id: typing.Optional[str],
         status: str,
+        skill_id: typing.Optional[str] = None,
         reason: typing.Optional[str] = None,
     ):
-        """Publish local task status updates for controller app UI."""
+        """Publish local task status updates for controller app UI.
+
+        Args:
+            primitive_name: Display name of the skill (cosmetic).
+            primitive_id:   UUID assigned by the agent for this task instance.
+            status:         One of "running", "failed", "interrupted", etc.
+            skill_id:       Deterministic skill ID (e.g. "innate-os/send_email").
+            reason:         Optional human-readable reason string.
+        """
         payload = {
             "primitive_name": primitive_name,
             "primitive_id": primitive_id,
             "skill_name": primitive_name,
-            "skill_id": primitive_id,
+            "skill_id": skill_id or primitive_id,
             "status": status,
             "timestamp": time.time(),
         }
@@ -1657,7 +1674,7 @@ class BrainClientNode(Node):
                 # Apply pose compensation for local navigation commands
                 task_inputs = payload.next_task.inputs
                 if (
-                    skill_name == "navigate_to_position"
+                    skill_id == "innate-os/navigate_to_position"
                     and task_inputs.get("local_frame", False)
                     and self.pose_at_image_send is not None
                 ):
@@ -1693,6 +1710,7 @@ class BrainClientNode(Node):
                     primitive_name=skill_name,
                     primitive_id=payload.next_task.primitive_id,
                     status="running",
+                    skill_id=skill_id,
                 )
                 self.primitive_running = {
                     "primitive_name": skill_name,
@@ -1975,6 +1993,7 @@ class BrainClientNode(Node):
                     primitive_name=self.primitive_running["primitive_name"],
                     primitive_id=self.primitive_running["primitive_id"],
                     status="failed",
+                    skill_id=self.primitive_running.get("skill_id"),
                     reason="Goal rejected by action server",
                 )
             self.primitive_running = None
@@ -2088,6 +2107,7 @@ class BrainClientNode(Node):
                 primitive_name=primitive_name,
                 primitive_id=primitive_id,
                 status=local_status,
+                skill_id=skill_id,
                 reason=local_reason,
             )
 
@@ -2126,6 +2146,7 @@ class BrainClientNode(Node):
                     primitive_name=pending_name,
                     primitive_id=pending_task.primitive_id,
                     status="running",
+                    skill_id=pending_skill_id,
                 )
                 self.primitive_running = {
                     "primitive_name": pending_name,
@@ -2736,6 +2757,7 @@ class BrainClientNode(Node):
                 primitive_name=self.primitive_running["primitive_name"],
                 primitive_id=self.primitive_running["primitive_id"],
                 status="interrupted",
+                skill_id=self.primitive_running.get("skill_id"),
             )
             self._goal_handle = None  # Clear after requesting cancel
 

@@ -31,14 +31,15 @@ from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 
 # Skills that MUST load in a headless Docker container (no hardware, no external APIs).
 # These have no blocking __init__ and no missing module-level imports.
+# Values are deterministic skill IDs (innate-os/<file_stem>).
 REQUIRED_SKILLS = {
-    "send_email",
-    "send_picture_via_email",
-    "retrieve_emails",
-    "arm_circle_motion",
-    "arm_move_to_xyz",
-    "arm_zero_position",
-    "scan_for_objects",
+    "innate-os/send_email",
+    "innate-os/send_picture_via_email",
+    "innate-os/retrieve_emails",
+    "innate-os/arm_circle_motion",
+    "innate-os/arm_move_to_xyz",
+    "innate-os/arm_zero_position",
+    "innate-os/scan_for_objects",
 }
 
 
@@ -120,35 +121,35 @@ class TestSkillDiscovery(unittest.TestCase):
     def test_default_skills_are_discovered(self):
         """AvailableSkills topic returns at least the required default skills."""
         msg = self._wait_for_skills()
-        skill_names = {s.name for s in msg.skills}
+        skill_ids = {s.id for s in msg.skills}
 
         self.assertGreaterEqual(
             len(msg.skills),
             len(REQUIRED_SKILLS),
-            f"Expected at least {len(REQUIRED_SKILLS)} skills, got {len(msg.skills)}: {sorted(skill_names)}",
+            f"Expected at least {len(REQUIRED_SKILLS)} skills, got {len(msg.skills)}: {sorted(skill_ids)}",
         )
 
-        missing = REQUIRED_SKILLS - skill_names
+        missing = REQUIRED_SKILLS - skill_ids
         self.assertFalse(
             missing,
-            f"Missing required skills: {sorted(missing)}. Available: {sorted(skill_names)}",
+            f"Missing required skills: {sorted(missing)}. Available: {sorted(skill_ids)}",
         )
 
         # Verify they are all code type
         for skill in msg.skills:
-            if skill.name in REQUIRED_SKILLS:
+            if skill.id in REQUIRED_SKILLS:
                 self.assertEqual(
                     skill.type,
                     "code",
-                    f"Skill '{skill.name}' should be type 'code', got '{skill.type}'",
+                    f"Skill '{skill.id}' should be type 'code', got '{skill.type}'",
                 )
 
     def test_send_email_has_correct_inputs(self):
         """send_email skill exposes subject, message, and recipients parameters."""
         msg = self._wait_for_skills()
-        send_email = next((s for s in msg.skills if s.name == "send_email"), None)
+        send_email = next((s for s in msg.skills if s.id == "innate-os/send_email"), None)
 
-        self.assertIsNotNone(send_email, "send_email skill not found")
+        self.assertIsNotNone(send_email, "innate-os/send_email skill not found")
         inputs = json.loads(send_email.inputs_json) if send_email.inputs_json else {}
         self.assertIn("subject", inputs)
         self.assertIn("message", inputs)
@@ -164,7 +165,7 @@ class TestSkillDiscovery(unittest.TestCase):
             )
 
             goal = ExecuteSkill.Goal()
-            goal.skill_type = "send_email"
+            goal.skill_type = "innate-os/send_email"
             goal.inputs = json.dumps(
                 {
                     "subject": "Integration Test",
@@ -188,7 +189,7 @@ class TestSkillDiscovery(unittest.TestCase):
 
             self.assertTrue(result.success, f"send_email failed: {result.message}")
             self.assertEqual(result.success_type, "success")
-            self.assertEqual(result.skill_type, "send_email")
+            self.assertEqual(result.skill_type, "innate-os/send_email")
             self.assertIn("Email sent to", result.message)
         finally:
             action_client.destroy()

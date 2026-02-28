@@ -117,15 +117,7 @@ class SkillsActionServer(Node):
             id_keyed[sid] = (display_name, cls, src_path)
 
         # Handle special case for navigation skill based on simulator mode
-        sim_id = "innate-os/navigate_to_position_sim"
-        real_id = "innate-os/navigate_to_position"
-        if self.simulator_mode and sim_id in id_keyed:
-            self.get_logger().info("Simulator mode: using NavigateToPositionSim for navigate_to_position")
-            _name, cls, src = id_keyed.pop(sim_id)
-            id_keyed[real_id] = ("navigate_to_position", cls, src)
-        elif sim_id in id_keyed:
-            self.get_logger().info("Real robot mode: removing sim navigation skill")
-            del id_keyed[sim_id]
+        self._apply_sim_swap(id_keyed)
 
         # Create code skill instances keyed by ID
         self._code_skills: dict[str, tuple[str, object]] = {}  # {id: (display_name, instance)}
@@ -348,13 +340,7 @@ class SkillsActionServer(Node):
             id_keyed[sid] = (display_name, cls, src_path)
 
         # Handle simulator mode nav swap
-        sim_id = "innate-os/navigate_to_position_sim"
-        real_id = "innate-os/navigate_to_position"
-        if self.simulator_mode and sim_id in id_keyed:
-            _name, cls, src = id_keyed.pop(sim_id)
-            id_keyed[real_id] = ("navigate_to_position", cls, src)
-        elif sim_id in id_keyed:
-            del id_keyed[sim_id]
+        self._apply_sim_swap(id_keyed)
 
         self._code_skills = {}
         for skill_id, (display_name, cls, _src) in id_keyed.items():
@@ -394,6 +380,21 @@ class SkillsActionServer(Node):
         self.get_logger().info(f"Scanning user skills directory: {user_skills_directory}")
         return [self._innate_os_skills_dir, user_skills_directory]
 
+    def _apply_sim_swap(self, id_keyed: dict[str, tuple[str, type, Path]]) -> None:
+        """Swap navigate_to_position_sim → navigate_to_position in sim mode, or remove it.
+
+        Mutates *id_keyed* in place.
+        """
+        sim_id = "innate-os/navigate_to_position_sim"
+        real_id = "innate-os/navigate_to_position"
+        if self.simulator_mode and sim_id in id_keyed:
+            self.get_logger().info("Simulator mode: using NavigateToPositionSim for navigate_to_position")
+            _name, cls, src = id_keyed.pop(sim_id)
+            id_keyed[real_id] = ("navigate_to_position", cls, src)
+        elif sim_id in id_keyed:
+            self.get_logger().info("Real robot mode: removing sim navigation skill")
+            del id_keyed[sim_id]
+
     def _compute_skill_id(self, path: str | Path) -> str:
         """Compute a deterministic skill ID from a file or directory path.
 
@@ -432,6 +433,7 @@ class SkillsActionServer(Node):
                 response.success = False
                 response.message = "Skill name cannot be empty."
                 response.skill_directory = ""
+                response.skill_id = ""
                 return response
 
             # Convert display name to kebab-case directory name
@@ -442,6 +444,7 @@ class SkillsActionServer(Node):
                 response.success = False
                 response.message = f"Cannot derive valid directory name from '{display_name}'."
                 response.skill_directory = ""
+                response.skill_id = ""
                 return response
 
             # Create under user skills directory (last in the list, ~/skills)
@@ -453,6 +456,7 @@ class SkillsActionServer(Node):
                 response.success = True
                 response.message = f"Skill already exists at {skill_dir}."
                 response.skill_directory = skill_dir
+                response.skill_id = self._compute_skill_id(skill_dir)
                 return response
 
             os.makedirs(skill_dir, exist_ok=True)
@@ -477,11 +481,13 @@ class SkillsActionServer(Node):
             response.success = True
             response.message = f"Created skill '{display_name}' at {skill_dir}."
             response.skill_directory = skill_dir
+            response.skill_id = self._compute_skill_id(skill_dir)
         except Exception as e:
             self.get_logger().error(f"Error creating physical skill: {e}")
             response.success = False
             response.message = f"Failed to create skill: {e}"
             response.skill_directory = ""
+            response.skill_id = ""
         return response
 
     def _handle_reload_skills_agents(self, request, response):

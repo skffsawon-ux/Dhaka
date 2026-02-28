@@ -16,6 +16,7 @@ class DemoAgent(Agent):
         return "Demo Agent"
 
     def get_skills(self) -> List[str]:
+        """Return skill IDs for navigation and waving."""
         return ["innate-os/navigate_to_position", "innate-os/wave", ]
 
     def get_inputs(self) -> List[str]:

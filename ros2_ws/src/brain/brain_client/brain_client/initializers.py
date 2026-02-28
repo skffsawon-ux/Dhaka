@@ -7,73 +7,9 @@ to keep the main brain_client_node.py clean and focused.
 """
 
 import os
-import sys
-import importlib.util
 from typing import Dict, Any, Optional, Tuple
 
-from brain_client.skill_loader import SkillLoader
 from brain_client.agent_loader import AgentLoader
-
-
-def initialize_skills(logger, simulator_mode: bool = False) -> Dict[str, Any]:
-    """
-    Initialize all skills using dynamic loading.
-
-    Args:
-        logger: ROS logger instance
-        simulator_mode: Whether to use simulator navigation skill
-
-    Returns:
-        Dictionary mapping skill names to their instances
-    """
-    skill_loader = SkillLoader(logger)
-
-    # Define directories to scan for skills
-    # Using the unified skills directory at the root plus ~/skills
-    innate_root = os.environ.get(
-        "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
-    )
-    skills_directories = [
-        os.path.join(innate_root, "skills"),
-        os.path.join(os.path.expanduser("~"), "skills"),
-    ]
-
-    # Ensure ~/skills directory exists
-    os.makedirs(skills_directories[1], exist_ok=True)
-
-    # Load all skills dynamically from all directories
-    discovered_skills = skill_loader.load_skills_from_directories(skills_directories)
-
-    logger.info(f"Discovered skills: {list(discovered_skills.keys())}")
-
-    # Handle special case for navigation skill based on simulator mode
-    if simulator_mode and "navigate_to_position_sim" in discovered_skills:
-        # In simulator mode, use the sim version for navigate_to_position
-        logger.info(
-            "Simulator mode: using NavigateToPositionSim for navigate_to_position"
-        )
-        discovered_skills["navigate_to_position"] = discovered_skills[
-            "navigate_to_position_sim"
-        ]
-        # Remove the _sim variant so it doesn't appear as a separate skill
-        del discovered_skills["navigate_to_position_sim"]
-    elif "navigate_to_position_sim" in discovered_skills:
-        # In real robot mode, remove the sim version entirely
-        logger.info("Real robot mode: using standard NavigateToPosition")
-        del discovered_skills["navigate_to_position_sim"]
-
-    # Create skill instances
-    skills_dict = {}
-    for skill_name, skill_class in discovered_skills.items():
-        try:
-            skill_instance = skill_class(logger)
-            skills_dict[skill_name] = skill_instance
-            logger.debug(f"Loaded skill: {skill_name}")
-        except Exception as e:
-            logger.error(f"Error instantiating skill {skill_name}: {e}")
-
-    logger.info(f"Successfully loaded {len(skills_dict)} skills")
-    return skills_dict
 
 
 def initialize_agents(

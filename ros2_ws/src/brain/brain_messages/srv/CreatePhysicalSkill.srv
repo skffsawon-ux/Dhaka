@@ -6,3 +6,4 @@ string name               # Display name for the skill (e.g. "Pick Up Socks")
 bool success
 string message
 string skill_directory     # Absolute path to the created skill directory
+string skill_id            # Deterministic skill ID (e.g. "local/pick-up-socks")
