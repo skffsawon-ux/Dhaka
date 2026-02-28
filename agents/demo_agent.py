@@ -16,7 +16,7 @@ class DemoAgent(Agent):
         return "Demo Agent"
 
     def get_skills(self) -> List[str]:
-        return ["navigate_to_position", "wave", ]
+        return ["innate-os/navigate_to_position", "innate-os/wave", ]
 
     def get_inputs(self) -> List[str]:
         """Enable microphone input to hear user"""

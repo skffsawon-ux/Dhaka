@@ -1,6 +1,7 @@
 # brain_messages/msg/SkillInfo.msg
 # Information about a single skill (code or physical)
-string name                     # Display name / identifier
+string id                       # Deterministic identifier: "innate-os/<basename>" or "local/<basename>"
+string name                     # Cosmetic display name (also used as LLM tool name — must be unique)
 string type                     # "code", "learned", "replay", "poses"
 string guidelines               # Agent guidelines for when to use this skill
 string guidelines_when_running  # Agent guidelines while the skill is running

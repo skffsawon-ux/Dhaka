@@ -28,8 +28,9 @@ class SkillLoader:
     def __init__(self, logger):
         self.logger = logger
 
-    def discover_skills_in_directory(self, directory_path: str) -> dict[str, type[Skill]]:
-        skills = {}
+    def discover_skills_in_directory(self, directory_path: str) -> dict[str, tuple[type[Skill], Path]]:
+        """Returns {display_name: (class, source_file)} for all code skills in the directory."""
+        skills: dict[str, tuple[type[Skill], Path]] = {}
         directory = Path(directory_path)
 
         if not directory.exists():
@@ -55,8 +56,9 @@ class SkillLoader:
         self.logger.info(f"Discovered {len(skills)} skills in {directory_path}")
         return skills
 
-    def _load_skills_from_file(self, file_path: Path) -> dict[str, type[Skill]]:
-        skills = {}
+    def _load_skills_from_file(self, file_path: Path) -> dict[str, tuple[type[Skill], Path]]:
+        """Returns {display_name: (class, source_file)} for each Skill subclass in the file."""
+        skills: dict[str, tuple[type[Skill], Path]] = {}
         module_name = file_path.stem
 
         # Load the module
@@ -99,7 +101,7 @@ class SkillLoader:
                 # Validate the skill class
                 if self._validate_skill_class(obj):
                     skill_name = self._get_skill_name(obj)
-                    skills[skill_name] = obj
+                    skills[skill_name] = (obj, file_path)
                     self.logger.debug(f"Loaded skill: {skill_name} from {file_path}")
                 else:
                     self.logger.warning(f"Invalid skill class: {name} in {file_path}")
@@ -141,73 +143,46 @@ class SkillLoader:
         s1 = re.sub("([a-z0-9])([A-Z])", r"\1_\2", class_name)
         return s1.lower()
 
-    def reload_skill_by_name(self, skill_name: str, directories: list[str]) -> type[Skill] | None:
+    def reload_skill_by_file_stem(self, file_stem: str, directories: list[str]) -> tuple[type[Skill], Path] | None:
         """
-        Reload a specific skill by name from the given directories.
-        
-        Args:
-            skill_name: The name of the skill to reload
-            directories: List of directories to search for the skill
-            
+        Reload a code skill by its file stem (e.g. 'navigate_to_position').
+
         Returns:
-            The reloaded skill class, or None if not found
+            (class, source_file) or None if not found.
         """
         for directory in directories:
-            directory_path = Path(directory)
-            if not directory_path.exists():
+            py_file = Path(directory) / f"{file_stem}.py"
+            if not py_file.exists():
                 continue
-                
-            # Search for python files that might contain this skill
-            python_files = [f for f in directory_path.glob("*.py") 
-                          if f.name != "__init__.py" and not f.name.startswith("_")]
-            
-            for py_file in python_files:
-                try:
-                    # Try to load skills from this file
-                    discovered = self._load_skills_from_file(py_file)
-                    if skill_name in discovered:
-                        self.logger.info(f"Reloaded skill '{skill_name}' from {py_file}")
-                        return discovered[skill_name]
-                except Exception as e:
-                    self.logger.debug(f"Error checking {py_file} for skill {skill_name}: {e}")
-        
-        self.logger.warning(f"Could not find skill '{skill_name}' in any directory")
+            try:
+                discovered = self._load_skills_from_file(py_file)
+                # Return the first skill found in the file
+                for _name, entry in discovered.items():
+                    self.logger.info(f"Reloaded skill from {py_file}")
+                    return entry
+            except Exception as e:
+                self.logger.debug(f"Error reloading {py_file}: {e}")
+
+        self.logger.warning(f"Could not find code skill file '{file_stem}.py' in any directory")
         return None
 
-    def reload_skills_by_names(self, skill_names: list[str], directories: list[str]) -> dict[str, type[Skill]]:
-        """
-        Reload specific skills by name.
-        
-        Args:
-            skill_names: List of skill names to reload
-            directories: List of directories to search
-            
-        Returns:
-            Dictionary of reloaded skill classes
-        """
-        reloaded = {}
-        for name in skill_names:
-            skill_class = self.reload_skill_by_name(name, directories)
-            if skill_class is not None:
-                reloaded[name] = skill_class
-        return reloaded
-
-    def load_skills_from_directories(self, directories: list[str]) -> dict[str, type[Skill]]:
-        all_skills = {}
+    def load_skills_from_directories(self, directories: list[str]) -> dict[str, tuple[type[Skill], Path]]:
+        """Returns {display_name: (class, source_file)} across all directories."""
+        all_skills: dict[str, tuple[type[Skill], Path]] = {}
 
         for directory in directories:
             try:
                 discovered = self.discover_skills_in_directory(directory)
 
                 # Check for name conflicts
-                for name, skill_class in discovered.items():
+                for name, entry in discovered.items():
                     if name in all_skills:
                         self.logger.warning(
                             f"Skill name conflict: '{name}' found in both "
-                            f"{all_skills[name].__module__} and {skill_class.__module__}. "
+                            f"{all_skills[name][0].__module__} and {entry[0].__module__}. "
                             f"Using the latter."
                         )
-                    all_skills[name] = skill_class
+                    all_skills[name] = entry
 
             except Exception as e:
                 self.logger.error(f"Error loading skills from {directory}: {e}")

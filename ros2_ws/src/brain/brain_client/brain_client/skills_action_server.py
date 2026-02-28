@@ -110,29 +110,34 @@ class SkillsActionServer(Node):
             f"Discovered skills: {list(discovered_skills.keys())} in directories {self._skills_directories}"
         )
 
-        # Handle special case for navigation skill based on simulator mode
-        if self.simulator_mode and "navigate_to_position_sim" in discovered_skills:
-            # In simulator mode, use the sim version for navigate_to_position
-            self.get_logger().info("Simulator mode: using NavigateToPositionSim for navigate_to_position")
-            discovered_skills["navigate_to_position"] = discovered_skills["navigate_to_position_sim"]
-            # Remove the _sim variant so it doesn't appear as a separate skill
-            del discovered_skills["navigate_to_position_sim"]
-        elif "navigate_to_position_sim" in discovered_skills:
-            # In real robot mode, remove the sim version entirely
-            self.get_logger().info("Real robot mode: using standard NavigateToPosition")
-            del discovered_skills["navigate_to_position_sim"]
+        # Build ID-keyed dict: {skill_id: (name, skill_class, source_path)}
+        id_keyed: dict[str, tuple[str, type, Path]] = {}
+        for display_name, (cls, src_path) in discovered_skills.items():
+            sid = self._compute_skill_id(src_path)
+            id_keyed[sid] = (display_name, cls, src_path)
 
-        # Create code skill instances
-        self._code_skills = {}
-        for skill_name, skill_class in discovered_skills.items():
+        # Handle special case for navigation skill based on simulator mode
+        sim_id = "innate-os/navigate_to_position_sim"
+        real_id = "innate-os/navigate_to_position"
+        if self.simulator_mode and sim_id in id_keyed:
+            self.get_logger().info("Simulator mode: using NavigateToPositionSim for navigate_to_position")
+            _name, cls, src = id_keyed.pop(sim_id)
+            id_keyed[real_id] = ("navigate_to_position", cls, src)
+        elif sim_id in id_keyed:
+            self.get_logger().info("Real robot mode: removing sim navigation skill")
+            del id_keyed[sim_id]
+
+        # Create code skill instances keyed by ID
+        self._code_skills: dict[str, tuple[str, object]] = {}  # {id: (display_name, instance)}
+        for skill_id, (display_name, skill_class, _src) in id_keyed.items():
             try:
                 skill_instance = skill_class(self.get_logger())
                 skill_instance.node = self  # Inject the node
                 self._inject_required_interfaces(skill_instance)
-                self._code_skills[skill_name] = skill_instance
-                self.get_logger().info(f"Loaded code skill: {skill_name}")
+                self._code_skills[skill_id] = (display_name, skill_instance)
+                self.get_logger().info(f"Loaded code skill: {skill_id} ({display_name})")
             except Exception as e:
-                self.get_logger().error(f"Error instantiating skill {skill_name}: {e}")
+                self.get_logger().error(f"Error instantiating skill {skill_id}: {e}")
 
         self.get_logger().info(f"Successfully loaded {len(self._code_skills)} code skills")
 
@@ -198,20 +203,36 @@ class SkillsActionServer(Node):
         self._hot_reload_watcher.start()
 
     def _on_skills_file_changed(self, skill_names: list, _agent_names: list):
-        """Called by HotReloadWatcher when skill files change."""
+        """Called by HotReloadWatcher when skill files change.
+        
+        Note: skill_names here are file stems from the watcher, not IDs.
+        """
         self.get_logger().info(f"Hot reload triggered for skills: {skill_names}")
         if skill_names:
-            self._reload_skills_selective(skill_names)
+            # Convert file stems to skill IDs for selective reload
+            skill_ids = []
+            for stem in skill_names:
+                for d in self._skills_directories:
+                    py_file = Path(d) / f"{stem}.py"
+                    subdir = Path(d) / stem
+                    if py_file.exists():
+                        skill_ids.append(self._compute_skill_id(py_file))
+                        break
+                    elif subdir.is_dir():
+                        skill_ids.append(self._compute_skill_id(subdir))
+                        break
+            self._reload_skills_selective(skill_ids)
         else:
             self._reload_skills()
         self._publish_skills_list()
 
-    def _build_skill_info(self, name: str, skill_type: str, guidelines: str,
+    def _build_skill_info(self, skill_id: str, name: str, skill_type: str, guidelines: str,
                           guidelines_when_running: str, inputs_json: str,
                           in_training: bool = False, episode_count: int = 0,
                           directory: str = "") -> SkillInfo:
         """Create a SkillInfo message from skill data."""
         msg = SkillInfo()
+        msg.id = skill_id
         msg.name = name
         msg.type = skill_type
         msg.guidelines = guidelines
@@ -227,8 +248,8 @@ class SkillsActionServer(Node):
         msg = AvailableSkills()
         skills = []
 
-        # Add code skills
-        for name, skill_instance in self._code_skills.items():
+        # Add code skills (dict is {id: (display_name, instance)})
+        for skill_id, (display_name, skill_instance) in self._code_skills.items():
             inputs = {}
             if hasattr(skill_instance, "execute"):
                 signature = inspect.signature(skill_instance.execute)
@@ -251,7 +272,8 @@ class SkillsActionServer(Node):
                     inputs[param_name] = param_type
 
             skills.append(self._build_skill_info(
-                name=name,
+                skill_id=skill_id,
+                name=display_name,
                 skill_type="code",
                 guidelines=(skill_instance.guidelines() if hasattr(skill_instance, "guidelines") else ""),
                 guidelines_when_running=(
@@ -262,12 +284,13 @@ class SkillsActionServer(Node):
                 inputs_json=json.dumps(inputs),
             ))
 
-        # Add physical skills (ready)
-        for name, physical_data in self._physical_skills.items():
+        # Add physical skills (ready) — dict is {id: skill_data}
+        for skill_id, physical_data in self._physical_skills.items():
             metadata = physical_data["metadata"]
             episode_count = self.skill_loader._get_episode_count(physical_data["directory"])
             skills.append(self._build_skill_info(
-                name=metadata.get("name", name),
+                skill_id=skill_id,
+                name=metadata.get("name", skill_id),
                 skill_type=metadata.get("type", "physical"),
                 guidelines=metadata.get("guidelines", ""),
                 guidelines_when_running=metadata.get("guidelines_when_running", ""),
@@ -277,12 +300,13 @@ class SkillsActionServer(Node):
                 directory=physical_data["directory"],
             ))
 
-        # Add in-training skills
-        for name, physical_data in self._in_training_skills.items():
+        # Add in-training skills — dict is {id: skill_data}
+        for skill_id, physical_data in self._in_training_skills.items():
             metadata = physical_data["metadata"]
             episode_count = self.skill_loader._get_episode_count(physical_data["directory"])
             skills.append(self._build_skill_info(
-                name=metadata.get("name", name),
+                skill_id=skill_id,
+                name=metadata.get("name", skill_id),
                 skill_type=metadata.get("type", "physical"),
                 guidelines=metadata.get("guidelines", ""),
                 guidelines_when_running=metadata.get("guidelines_when_running", ""),
@@ -291,6 +315,17 @@ class SkillsActionServer(Node):
                 episode_count=episode_count,
                 directory=physical_data["directory"],
             ))
+
+        # Enforce unique display names (LLM can't disambiguate duplicates)
+        seen_names: dict[str, str] = {}  # {name: first_id}
+        for s in skills:
+            if s.name in seen_names:
+                self.get_logger().error(
+                    f"DUPLICATE skill name '{s.name}' between {seen_names[s.name]} and {s.id}. "
+                    f"Refusing to publish skills list — fix the name collision."
+                )
+                return
+            seen_names[s.name] = s.id
 
         msg.skills = skills
         self._skills_publisher.publish(msg)
@@ -306,23 +341,31 @@ class SkillsActionServer(Node):
         # Reload code skills from all configured directories
         discovered_skills = self.skill_loader.load_skills_from_directories(self._skills_directories)
 
+        # Build ID-keyed dict
+        id_keyed: dict[str, tuple[str, type, Path]] = {}
+        for display_name, (cls, src_path) in discovered_skills.items():
+            sid = self._compute_skill_id(src_path)
+            id_keyed[sid] = (display_name, cls, src_path)
+
         # Handle simulator mode nav swap
-        if self.simulator_mode and "navigate_to_position_sim" in discovered_skills:
-            discovered_skills["navigate_to_position"] = discovered_skills["navigate_to_position_sim"]
-            del discovered_skills["navigate_to_position_sim"]
-        elif "navigate_to_position_sim" in discovered_skills:
-            del discovered_skills["navigate_to_position_sim"]
+        sim_id = "innate-os/navigate_to_position_sim"
+        real_id = "innate-os/navigate_to_position"
+        if self.simulator_mode and sim_id in id_keyed:
+            _name, cls, src = id_keyed.pop(sim_id)
+            id_keyed[real_id] = ("navigate_to_position", cls, src)
+        elif sim_id in id_keyed:
+            del id_keyed[sim_id]
 
         self._code_skills = {}
-        for name, cls in discovered_skills.items():
+        for skill_id, (display_name, cls, _src) in id_keyed.items():
             try:
                 instance = cls(self.get_logger())
                 instance.node = self
                 self._inject_required_interfaces(instance)
-                self._code_skills[name] = instance
-                self.get_logger().info(f"Reloaded code skill: {name}")
+                self._code_skills[skill_id] = (display_name, instance)
+                self.get_logger().info(f"Reloaded code skill: {skill_id}")
             except Exception as e:
-                self.get_logger().error(f"Error instantiating {name}: {e}")
+                self.get_logger().error(f"Error instantiating {skill_id}: {e}")
 
         # Reload physical skills (from all skill directories)
         self._physical_skills, self._in_training_skills = self._load_physical_skills(self._skills_directories)
@@ -337,19 +380,32 @@ class SkillsActionServer(Node):
         maurice_root = os.environ.get(
             "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
         )
-        skills_directory = os.path.join(maurice_root, "skills")
+        self._innate_os_skills_dir = os.path.join(maurice_root, "skills")
         user_skills_directory = os.path.join(os.path.expanduser("~"), "skills")
 
-        if not os.path.exists(skills_directory):
-            self.get_logger().fatal(f"Skills directory not found: {skills_directory}")
-            raise FileNotFoundError(f"Skills directory must exist at {skills_directory}")
+        if not os.path.exists(self._innate_os_skills_dir):
+            self.get_logger().fatal(f"Skills directory not found: {self._innate_os_skills_dir}")
+            raise FileNotFoundError(f"Skills directory must exist at {self._innate_os_skills_dir}")
 
         # Match initializer behavior: ensure ~/skills is always available.
         os.makedirs(user_skills_directory, exist_ok=True)
 
-        self.get_logger().info(f"Scanning root skills directory: {skills_directory}")
+        self.get_logger().info(f"Scanning root skills directory: {self._innate_os_skills_dir}")
         self.get_logger().info(f"Scanning user skills directory: {user_skills_directory}")
-        return [skills_directory, user_skills_directory]
+        return [self._innate_os_skills_dir, user_skills_directory]
+
+    def _compute_skill_id(self, path: str | Path) -> str:
+        """Compute a deterministic skill ID from a file or directory path.
+
+        Returns 'innate-os/<basename>' for paths under $INNATE_OS_ROOT/skills,
+        'local/<basename>' for paths under ~/skills.
+        """
+        path = str(Path(path).resolve())
+        root = str(Path(self._innate_os_skills_dir).resolve())
+        basename = Path(path).stem if path.endswith(".py") else Path(path).name
+        if path.startswith(root):
+            return f"innate-os/{basename}"
+        return f"local/{basename}"
 
     def _handle_reload_skills(self, request, response):
         """Service handler for reloading skills."""
@@ -429,10 +485,10 @@ class SkillsActionServer(Node):
         return response
 
     def _handle_reload_skills_agents(self, request, response):
-        """Service handler for selectively reloading specific skills."""
+        """Service handler for selectively reloading specific skills (by ID)."""
         try:
-            skill_names = list(request.skills) if request.skills else []
-            reloaded = self._reload_skills_selective(skill_names)
+            skill_ids = list(request.skills) if request.skills else []
+            reloaded = self._reload_skills_selective(skill_ids)
             response.success = True
             response.reloaded_skills = reloaded
             response.reloaded_agents = []  # Skills server doesn't handle agents
@@ -444,66 +500,60 @@ class SkillsActionServer(Node):
             response.reloaded_agents = []
         return response
 
-    def _reload_skills_selective(self, skill_names: list[str]) -> list[str]:
+    def _reload_skills_selective(self, skill_ids: list[str]) -> list[str]:
+        """Reload specific skills by ID. Empty list means reload all.
+
+        Returns list of skill IDs that were successfully reloaded.
         """
-        Reload specific skills by name. If skill_names is empty, reload all.
-        
-        Args:
-            skill_names: List of skill names to reload. Empty list means reload all.
-            
-        Returns:
-            List of skill names that were successfully reloaded.
-        """
-        if not skill_names:
-            # Empty list means reload all
+        if not skill_ids:
             self._reload_skills()
             return list(self._code_skills.keys()) + list(self._physical_skills.keys())
-        
-        self.get_logger().info(f"Selectively reloading skills: {skill_names}")
+
+        self.get_logger().info(f"Selectively reloading skills: {skill_ids}")
         reloaded = []
-        
-        for skill_name in skill_names:
+
+        for skill_id in skill_ids:
+            # Extract the basename from the ID (e.g. 'innate-os/foo' -> 'foo')
+            basename = skill_id.split("/", 1)[-1] if "/" in skill_id else skill_id
+
             # Check if it's a code skill
-            if skill_name in self._code_skills or self._is_code_skill(skill_name):
-                reloaded_class = self.skill_loader.reload_skill_by_name(
-                    skill_name, self._skills_directories
-                )
-                if reloaded_class is not None:
+            if skill_id in self._code_skills or self._is_code_skill_id(skill_id):
+                result = self.skill_loader.reload_skill_by_file_stem(basename, self._skills_directories)
+                if result is not None:
+                    cls, src_path = result
+                    display_name = self.skill_loader._get_skill_name(cls)
                     try:
-                        instance = reloaded_class(self.get_logger())
+                        instance = cls(self.get_logger())
                         instance.node = self
                         self._inject_required_interfaces(instance)
-                        self._code_skills[skill_name] = instance
-                        reloaded.append(skill_name)
-                        self.get_logger().info(f"Reloaded code skill: {skill_name}")
+                        self._code_skills[skill_id] = (display_name, instance)
+                        reloaded.append(skill_id)
+                        self.get_logger().info(f"Reloaded code skill: {skill_id}")
                     except Exception as e:
-                        self.get_logger().error(f"Error instantiating {skill_name}: {e}")
-            
-            # Check if it's a physical skill (reload from metadata)
-            elif skill_name in self._physical_skills or skill_name in self._in_training_skills:
-                # For physical skills, reload the metadata
-                if self._reload_physical_skill(skill_name):
-                    reloaded.append(skill_name)
-        
+                        self.get_logger().error(f"Error instantiating {skill_id}: {e}")
+
+            # Check if it's a physical skill
+            elif skill_id in self._physical_skills or skill_id in self._in_training_skills:
+                if self._reload_physical_skill(skill_id):
+                    reloaded.append(skill_id)
+
         self.get_logger().info(f"Selectively reloaded {len(reloaded)} skills")
         self._publish_skills_list()
         return reloaded
 
-    def _is_code_skill(self, skill_name: str) -> bool:
-        """Check if a skill name corresponds to a code skill file."""
+    def _is_code_skill_id(self, skill_id: str) -> bool:
+        """Check if a skill ID corresponds to a code skill file."""
+        basename = skill_id.split("/", 1)[-1] if "/" in skill_id else skill_id
         for directory in self._skills_directories:
-            for py_file in Path(directory).glob("*.py"):
-                if py_file.name != "__init__.py" and not py_file.name.startswith("_"):
-                    # Check if the snake_case version of the file matches
-                    file_skill_name = py_file.stem
-                    if file_skill_name == skill_name:
-                        return True
+            if (Path(directory) / f"{basename}.py").exists():
+                return True
         return False
 
-    def _reload_physical_skill(self, skill_name: str) -> bool:
-        """Reload a single physical skill's metadata."""
+    def _reload_physical_skill(self, skill_id: str) -> bool:
+        """Reload a single physical skill's metadata by ID."""
+        basename = skill_id.split("/", 1)[-1] if "/" in skill_id else skill_id
         for skills_directory in self._skills_directories:
-            skill_path = os.path.join(skills_directory, skill_name)
+            skill_path = os.path.join(skills_directory, basename)
             metadata_path = os.path.join(skill_path, "metadata.json")
             
             if os.path.exists(metadata_path):
@@ -524,18 +574,16 @@ class SkillsActionServer(Node):
                         }
                         
                         if is_in_training:
-                            self._in_training_skills[skill_name] = skill_data
-                            # Remove from ready skills if it was there
-                            self._physical_skills.pop(skill_name, None)
+                            self._in_training_skills[skill_id] = skill_data
+                            self._physical_skills.pop(skill_id, None)
                         else:
-                            self._physical_skills[skill_name] = skill_data
-                            # Remove from in-training if it was there
-                            self._in_training_skills.pop(skill_name, None)
+                            self._physical_skills[skill_id] = skill_data
+                            self._in_training_skills.pop(skill_id, None)
                         
-                        self.get_logger().info(f"Reloaded physical skill: {skill_name}")
+                        self.get_logger().info(f"Reloaded physical skill: {skill_id}")
                         return True
                 except Exception as e:
-                    self.get_logger().error(f"Error reloading physical skill {skill_name}: {e}")
+                    self.get_logger().error(f"Error reloading physical skill {skill_id}: {e}")
         
         return False
 
@@ -564,7 +612,7 @@ class SkillsActionServer(Node):
                     if os.path.exists(metadata_path):
                         with open(metadata_path) as f:
                             metadata = json.load(f)
-                            skill_name = metadata.get("name", item)
+                            skill_id = self._compute_skill_id(Path(item_path))
 
                             # Validate skill before loading
                             is_valid, is_in_training, episode_count = self.skill_loader.validate_physical_skill(
@@ -580,17 +628,17 @@ class SkillsActionServer(Node):
                                 }
 
                                 if is_in_training:
-                                    in_training_skills[skill_name] = skill_data
+                                    in_training_skills[skill_id] = skill_data
                                     self.get_logger().info(
-                                        f"Loaded in-training skill: {skill_name} (type: {metadata.get('type', 'unknown')})"
+                                        f"Loaded in-training skill: {skill_id} (type: {metadata.get('type', 'unknown')})"
                                     )
                                 else:
-                                    physical_skills[skill_name] = skill_data
+                                    physical_skills[skill_id] = skill_data
                                     self.get_logger().info(
-                                        f"Loaded physical skill: {skill_name} (type: {metadata.get('type', 'unknown')})"
+                                        f"Loaded physical skill: {skill_id} (type: {metadata.get('type', 'unknown')})"
                                     )
                             else:
-                                self.get_logger().warn(f"Skipped invalid physical skill: {skill_name}")
+                                self.get_logger().warn(f"Skipped invalid physical skill: {skill_id}")
 
         return physical_skills, in_training_skills
 
@@ -600,17 +648,15 @@ class SkillsActionServer(Node):
 
     def cancel_callback(self, goal_handle):
         try:
-            # Get the skill type from the goal handle
+            # Get the skill type (ID) from the goal handle
             skill_type = goal_handle.request.skill_type
 
             # Find and cancel the code skill
             if skill_type in self._code_skills:
-                skill = self._code_skills[skill_type]
+                _name, instance = self._code_skills[skill_type]
                 self.get_logger().debug(f"Canceling code skill: {skill_type}")
-                skill.cancel()
+                instance.cancel()
             elif skill_type in self._physical_skills:
-                # Physical skills are handled by behavior_server
-                # Cancellation will be forwarded by the action client
                 self.get_logger().debug(f"Canceling physical skill: {skill_type}")
             else:
                 self.get_logger().warning(f"Unknown skill type: {skill_type}")
@@ -619,11 +665,11 @@ class SkillsActionServer(Node):
 
             # If we couldn't determine the skill type, try to cancel all code skills
             self.get_logger().debug("Attempting to cancel all code skills")
-            for name, skill in self._code_skills.items():
+            for sid, (_name, instance) in self._code_skills.items():
                 try:
-                    skill.cancel()
+                    instance.cancel()
                 except Exception as cancel_error:
-                    err_msg = f"Error canceling {name}: {str(cancel_error)}"
+                    err_msg = f"Error canceling {sid}: {str(cancel_error)}"
                     self.get_logger().error(err_msg)
 
         return CancelResponse.ACCEPT
@@ -796,7 +842,7 @@ class SkillsActionServer(Node):
             self._state_update_stop_event.wait(0.02)
 
     def _execute_code_skill(self, goal_handle, skill_type, inputs):
-        skill = self._code_skills[skill_type]
+        _name, skill = self._code_skills[skill_type]
 
         # Define a feedback publisher for the skill
         def _publish_feedback(update_message: str, image_b64: str = None):

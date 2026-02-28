@@ -16,7 +16,7 @@ class BoardCalibrationAgent(Agent):
 
     def get_skills(self) -> list[str]:
         """Return position recording skill."""
-        return ["record_position"]
+        return ["innate-os/record_position"]
 
     def get_inputs(self) -> list[str]:
         """Enable microphone input."""

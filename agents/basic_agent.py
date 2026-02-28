@@ -17,9 +17,9 @@ class BasicAgent(Agent):
         return "No Prompt"
 
     def get_skills(self) -> List[str]:
-        """Return the list of primitives this directive can use"""
+        """Return the list of skill IDs this directive can use"""
         return [
-            "navigate_to_position"
+            "innate-os/navigate_to_position"
         ]
 
     def get_inputs(self) -> List[str]:

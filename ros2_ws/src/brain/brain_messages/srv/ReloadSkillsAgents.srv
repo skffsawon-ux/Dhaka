@@ -1,5 +1,5 @@
 # Request
-# List of skill names to reload (empty = reload all skills)
+# List of skill IDs to reload (empty = reload all skills)
 string[] skills
 # List of agent names to reload (empty = reload all agents)
 string[] agents

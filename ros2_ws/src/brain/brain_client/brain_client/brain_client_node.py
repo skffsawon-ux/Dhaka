@@ -564,6 +564,8 @@ class BrainClientNode(Node):
         # Wait for first skills message from SAS (transient_local will replay last)
         self.primitives_dict = {}
         self.primitives_metadata_list = []
+        self._name_to_id = {}
+        self._id_to_name = {}
         self.get_logger().info("Waiting for /brain/available_skills topic...")
         deadline = time.time() + 25.0
         while not self.primitives_dict and time.time() < deadline:
@@ -653,10 +655,13 @@ class BrainClientNode(Node):
     def _on_available_skills(self, msg: AvailableSkills):
         """Callback for /brain/available_skills topic (latched, transient_local)."""
         primitives_list = []
-        primitives_dict = {}
+        primitives_dict = {}  # keyed by skill ID
+        name_to_id = {}
+        id_to_name = {}
 
         for skill_info in msg.skills:
             metadata = {
+                "id": skill_info.id,
                 "name": skill_info.name,
                 "type": skill_info.type,
                 "guidelines": skill_info.guidelines,
@@ -678,10 +683,14 @@ class BrainClientNode(Node):
                 def guidelines_when_running(self):
                     return self.metadata.get("guidelines_when_running", "")
 
-            primitives_dict[skill_info.name] = MockPrimitive(metadata)
+            primitives_dict[skill_info.id] = MockPrimitive(metadata)
+            name_to_id[skill_info.name] = skill_info.id
+            id_to_name[skill_info.id] = skill_info.name
 
         self.primitives_metadata_list = primitives_list
         self.primitives_dict = primitives_dict
+        self._name_to_id = name_to_id
+        self._id_to_name = id_to_name
 
         code_count = sum(1 for s in msg.skills if s.type == "code")
         learned_count = sum(1 for s in msg.skills if s.type == "learned")
@@ -1632,11 +1641,23 @@ class BrainClientNode(Node):
 
             if payload.next_task.type in self.primitives_dict:
                 self._pause_gaze()  # Pause gaze during skill execution
+                skill_id = payload.next_task.type  # already an ID
+            elif payload.next_task.type in self._name_to_id:
+                self._pause_gaze()
+                skill_id = self._name_to_id[payload.next_task.type]  # LLM sent name → translate
+            else:
+                self.get_logger().warn(
+                    f"Unknown primitive type: {payload.next_task.type}"
+                )
+                skill_id = None
+
+            if skill_id is not None:
+                skill_name = self._id_to_name.get(skill_id, payload.next_task.type)
 
                 # Apply pose compensation for local navigation commands
                 task_inputs = payload.next_task.inputs
                 if (
-                    payload.next_task.type == "navigate_to_position"
+                    skill_name == "navigate_to_position"
                     and task_inputs.get("local_frame", False)
                     and self.pose_at_image_send is not None
                 ):
@@ -1657,25 +1678,26 @@ class BrainClientNode(Node):
                         )
 
                 self.send_primitive_goal(
-                    payload.next_task.type,
+                    skill_id,
                     task_inputs,
                 )
                 status_msg = MessageIn(
                     type=MessageInType.PRIMITIVE_ACTIVATED,
                     payload={
-                        "primitive_name": payload.next_task.type,
+                        "primitive_name": skill_name,
                         "primitive_id": payload.next_task.primitive_id,
                     },
                 )
                 self.ws_bridge.send_message(status_msg)
                 self._publish_task_status(
-                    primitive_name=payload.next_task.type,
+                    primitive_name=skill_name,
                     primitive_id=payload.next_task.primitive_id,
                     status="running",
                 )
                 self.primitive_running = {
-                    "primitive_name": payload.next_task.type,
+                    "primitive_name": skill_name,
                     "primitive_id": payload.next_task.primitive_id,
+                    "skill_id": skill_id,
                 }
             else:
                 self.get_logger().warn(
@@ -2001,22 +2023,16 @@ class BrainClientNode(Node):
         self.cmd_vel_pub.publish(stop_cmd)
 
         # --- Send status message FIRST ---
-        # Get primitive info from the primitive_running dictionary
+        # result.skill_type is the skill ID; get the cosmetic name
+        skill_id = result.skill_type
+        primitive_name = self._id_to_name.get(skill_id, skill_id)
         primitive_id = None
-        primitive_name = result.skill_type  # Use name from result
-        if (
-            self.primitive_running
-            and self.primitive_running["primitive_name"] == primitive_name
-        ):
+        if self.primitive_running:
             primitive_id = self.primitive_running["primitive_id"]
-        elif self.primitive_running:
-            self.get_logger().warn(
-                f"Primitive name mismatch in result ({primitive_name}) and running ({self.primitive_running['primitive_name']})"
-            )
-            primitive_id = self.primitive_running[
-                "primitive_id"
-            ]  # Use stored ID anyway?
-
+            if self.primitive_running.get("skill_id") != skill_id:
+                self.get_logger().warn(
+                    f"Skill ID mismatch in result ({skill_id}) and running ({self.primitive_running.get('skill_id')})"
+                )
         self.primitive_running = None  # Clear running state
         self._resume_gaze()  # Resume gaze after skill execution
 
@@ -2086,24 +2102,37 @@ class BrainClientNode(Node):
             )
             pending_task = self._pending_next_task
             self._pending_next_task = None  # Clear before sending new goal
-            status_msg = MessageIn(
-                type=MessageInType.PRIMITIVE_ACTIVATED,
-                payload={
-                    "primitive_name": pending_task.type,
+
+            # Translate LLM name → skill ID
+            if pending_task.type in self._name_to_id:
+                pending_skill_id = self._name_to_id[pending_task.type]
+            elif pending_task.type in self.primitives_dict:
+                pending_skill_id = pending_task.type  # already an ID
+            else:
+                self.get_logger().warn(f"Unknown pending primitive: {pending_task.type}")
+                pending_skill_id = None
+
+            if pending_skill_id is not None:
+                pending_name = self._id_to_name.get(pending_skill_id, pending_task.type)
+                status_msg = MessageIn(
+                    type=MessageInType.PRIMITIVE_ACTIVATED,
+                    payload={
+                        "primitive_name": pending_name,
+                        "primitive_id": pending_task.primitive_id,
+                    },
+                )
+                self.ws_bridge.send_message(status_msg)
+                self._publish_task_status(
+                    primitive_name=pending_name,
+                    primitive_id=pending_task.primitive_id,
+                    status="running",
+                )
+                self.primitive_running = {
+                    "primitive_name": pending_name,
                     "primitive_id": pending_task.primitive_id,
-                },
-            )
-            self.ws_bridge.send_message(status_msg)
-            self._publish_task_status(
-                primitive_name=pending_task.type,
-                primitive_id=pending_task.primitive_id,
-                status="running",
-            )
-            self.primitive_running = {
-                "primitive_name": pending_task.type,
-                "primitive_id": pending_task.primitive_id,
-            }
-            self.send_primitive_goal(pending_task.type, pending_task.inputs)
+                    "skill_id": pending_skill_id,
+                }
+                self.send_primitive_goal(pending_skill_id, pending_task.inputs)
         elif self._pending_next_task is not None:
             # Clear pending task if the goal finished differently (SUCCESS/FAILURE)
             self.get_logger().warn(
@@ -2191,7 +2220,7 @@ class BrainClientNode(Node):
             )
             primitives = []
             if self.primitives_dict:
-                for primitive_name, primitive in self.primitives_dict.items():
+                for skill_id, primitive in self.primitives_dict.items():
                     # Extract parameter information using introspection
                     params = {}
                     if hasattr(primitive, "execute"):
@@ -2227,7 +2256,8 @@ class BrainClientNode(Node):
 
                     primitives.append(
                         {
-                            "name": primitive_name,
+                            "id": skill_id,
+                            "name": self._id_to_name.get(skill_id, skill_id),
                             "guidelines": primitive.guidelines(),
                             "guidelines_when_running": primitive.guidelines_when_running(),
                             "inputs": params,
@@ -2235,7 +2265,7 @@ class BrainClientNode(Node):
                     )
 
         included_primitives = [
-            p for p in primitives if p["name"] in self.current_directive.get_skills()
+            p for p in primitives if p["id"] in self.current_directive.get_skills()
         ]
 
         # Create and send the registration message
