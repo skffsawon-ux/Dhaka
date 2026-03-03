@@ -19,7 +19,7 @@ from typing import Any, Generator
 
 from .client import APIError, OrchestratorClient
 from .compression import cleanup_compressed
-from .downloader import download_results, _download_files
+from .downloader import download_results, download_skill_data, _download_files
 from .types import (
     ClientConfig,
     RunInfo,
@@ -463,27 +463,10 @@ class SkillManager:
         Files are saved into *dest_dir*.  ``.zst`` files are auto-decompressed.
         Yields :class:`ProgressUpdate` for each file downloaded.
         """
-        yield ProgressUpdate(
-            stage=ProgressStage.DOWNLOADING,
-            message=f"Listing input data files for skill {skill_id}…",
-            skill_id=skill_id,
-        )
-
-        files = self.client.list_skill_files(skill_id)
-
-        if not files:
-            yield ProgressUpdate(
-                stage=ProgressStage.DOWNLOADING,
-                message="No input data files found for this skill.",
-                skill_id=skill_id,
-            )
-            return
-
-        yield from _download_files(
+        yield from download_skill_data(
             client=self.client,
-            files=files,
-            dest_dir=Path(dest_dir),
             skill_id=skill_id,
+            dest_dir=Path(dest_dir),
         )
 
     # ── Cleanup ─────────────────────────────────────────────────────

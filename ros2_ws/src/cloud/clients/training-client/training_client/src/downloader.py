@@ -156,3 +156,40 @@ def download_results(
         skill_id=skill_id,
         run_id=run_id,
     )
+
+
+def download_skill_data(
+    *,
+    client: OrchestratorClient,
+    skill_id: str,
+    dest_dir: Path,
+) -> Generator[ProgressUpdate, None, None]:
+    """List and download all input data files for a skill into *dest_dir*."""
+    yield ProgressUpdate(
+        stage=ProgressStage.DOWNLOADING,
+        message=f"Listing input data files for skill {skill_id}…",
+        skill_id=skill_id,
+    )
+
+    files = client.list_skill_files(skill_id)
+
+    if not files:
+        yield ProgressUpdate(
+            stage=ProgressStage.DOWNLOADING,
+            message="No input data files found for this skill.",
+            skill_id=skill_id,
+        )
+        return
+
+    yield ProgressUpdate(
+        stage=ProgressStage.DOWNLOADING,
+        message=f"Found {len(files)} input data file(s) to download",
+        skill_id=skill_id,
+    )
+
+    yield from _download_files(
+        client=client,
+        files=files,
+        dest_dir=dest_dir,
+        skill_id=skill_id,
+    )
