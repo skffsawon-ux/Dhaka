@@ -19,7 +19,7 @@ from typing import Any, Generator
 
 from .client import APIError, OrchestratorClient
 from .compression import cleanup_compressed
-from .downloader import download_results, download_skill_data, download_files, _download_files
+from .downloader import download_results, download_skill_data, download_files
 from .types import (
     ClientConfig,
     RunInfo,
