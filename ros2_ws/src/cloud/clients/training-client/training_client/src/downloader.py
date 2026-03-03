@@ -11,7 +11,6 @@ from typing import Generator
 from .client import OrchestratorClient
 from .compression import decompress_file
 from .types import (
-    ClientConfig,
     FileProgress,
     ProgressStage,
     ProgressUpdate,
@@ -178,6 +177,11 @@ def download_skill_data(
         yield ProgressUpdate(
             stage=ProgressStage.DOWNLOADING,
             message="No input data files found for this skill.",
+            skill_id=skill_id,
+        )
+        yield ProgressUpdate(
+            stage=ProgressStage.DONE,
+            message=f"Skill {skill_id} input data downloaded to {dest_dir}",
             skill_id=skill_id,
         )
         return
