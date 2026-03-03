@@ -164,6 +164,8 @@ def download_skill_data(
     dest_dir: Path,
 ) -> Generator[ProgressUpdate, None, None]:
     """List and download all input data files for a skill into *dest_dir*."""
+    dest_dir = dest_dir.resolve()
+
     yield ProgressUpdate(
         stage=ProgressStage.DOWNLOADING,
         message=f"Listing input data files for skill {skill_id}…",
@@ -190,5 +192,11 @@ def download_skill_data(
         client=client,
         files=files,
         dest_dir=dest_dir,
+        skill_id=skill_id,
+    )
+
+    yield ProgressUpdate(
+        stage=ProgressStage.DONE,
+        message=f"Skill {skill_id} input data downloaded to {dest_dir}",
         skill_id=skill_id,
     )
