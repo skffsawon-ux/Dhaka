@@ -19,7 +19,7 @@ from typing import Any, Generator
 
 from .client import APIError, OrchestratorClient
 from .compression import cleanup_compressed
-from .downloader import download_results, download_skill_data, _download_files
+from .downloader import download_results, download_skill_data, download_files, _download_files
 from .types import (
     ClientConfig,
     RunInfo,
@@ -367,7 +367,6 @@ class SkillManager:
 
         yield from download_results(
             client=self.client,
-            config=self.config,
             skill_id=skill_id,
             run_id=run_id,
             dest_dir=dest,

@@ -20,7 +20,7 @@ from .types import (
 logger = logging.getLogger(__name__)
 
 
-def _download_files(
+def download_files(
     *,
     client: OrchestratorClient,
     files: dict[str, str],
@@ -118,7 +118,6 @@ def _download_files(
 def download_results(
     *,
     client: OrchestratorClient,
-    config: ClientConfig,
     skill_id: str,
     run_id: int,
     dest_dir: Path,
@@ -149,7 +148,7 @@ def download_results(
         run_id=run_id,
     )
 
-    yield from _download_files(
+    yield from download_files(
         client=client,
         files=files,
         dest_dir=dest_dir,
@@ -187,7 +186,7 @@ def download_skill_data(
         skill_id=skill_id,
     )
 
-    yield from _download_files(
+    yield from download_files(
         client=client,
         files=files,
         dest_dir=dest_dir,
