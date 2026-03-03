@@ -585,7 +585,7 @@ class BrainClientNode(Node):
             rclpy.spin_once(self, timeout_sec=0.5)
         if not self.primitives_dict:
             self.get_logger().warn(
-                "No primitives received from /brain/available_skills after 15s"
+                "No primitives received from /brain/available_skills after 25s"
             )
 
         self.directives, self.current_directive = initialize_agents(

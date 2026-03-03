@@ -201,7 +201,7 @@ def build_skill_status(
 ) -> TrainingSkillStatus:
     """Build a ``TrainingSkillStatus`` msg (skill + nested runs)."""
     s = TrainingSkillStatus()
-    s.skill_id = skill_id
+    s.training_skill_id = skill_id
     s.skill_name = skill.name if skill else ""
     s.skill_dir = skill_dir
     s.transfer_done = upload_done

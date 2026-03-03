@@ -309,17 +309,19 @@ class SkillsActionServer(Node):
             ))
 
         # Enforce unique display names (LLM can't disambiguate duplicates)
+        filtered_skills = []
         seen_names: dict[str, str] = {}  # {name: first_id}
         for s in skills:
             if s.name in seen_names:
                 self.get_logger().error(
                     f"DUPLICATE skill name '{s.name}' between {seen_names[s.name]} and {s.id}. "
-                    f"Refusing to publish skills list — fix the name collision."
+                    f"Skipping '{s.id}' — rename the skill to fix this."
                 )
-                return
+                continue  # skip the duplicate, keep the rest
             seen_names[s.name] = s.id
+            filtered_skills.append(s)
 
-        msg.skills = skills
+        msg.skills = filtered_skills
         self._skills_publisher.publish(msg)
         self.get_logger().info(f"Published {len(skills)} skills on /brain/available_skills")
 

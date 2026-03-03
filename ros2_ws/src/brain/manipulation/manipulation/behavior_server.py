@@ -532,6 +532,9 @@ class BehaviorServer(Node):
         self.get_logger().info(f"Executing replay behavior: {behavior_name}")
         
         replay_file = behavior_config['execution'].get('replay_file')
+        if not replay_file:
+            self.get_logger().error("Missing replay_file in behavior execution config")
+            return "FAILURE", "Missing replay_file in behavior execution config"
         file_path = os.path.join(skill_dir, replay_file)
         start_pose = behavior_config['execution'].get('start_pose')
         end_pose = behavior_config['execution'].get('end_pose')

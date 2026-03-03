@@ -117,7 +117,7 @@ def _fmt_run(run: TrainingRunStatus, indent: str = "    ") -> str:
 
 def _fmt_skill(skill: TrainingSkillStatus) -> str:
     name = skill.skill_name or "(unnamed)"
-    lines = [f"  Skill {skill.skill_id}  ({name})"]
+    lines = [f"  Skill {skill.training_skill_id}  ({name})"]
     if skill.skill_dir:
         lines.append(f"    dir: {skill.skill_dir}")
     if skill.transfer_done:
