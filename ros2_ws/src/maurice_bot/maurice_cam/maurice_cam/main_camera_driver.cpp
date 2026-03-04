@@ -27,7 +27,6 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   this->declare_parameter<bool>("publish_stereo", false);  // Combined stereo image for legacy compatibility
   this->declare_parameter<int>("exposure", -1);  // -1 means use current value
   this->declare_parameter<int>("gain", -1);      // -1 means use current value
-  this->declare_parameter<bool>("disable_auto_exposure", false);
   this->declare_parameter<int>("default_gain", 110);  // Default gain for auto-exposure mode
   
   // Auto exposure parameters
@@ -56,7 +55,6 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   // Get V4L2 control parameters
   exposure_setting_ = this->get_parameter("exposure").as_int();
   gain_setting_ = this->get_parameter("gain").as_int();
-  disable_auto_exposure_ = this->get_parameter("disable_auto_exposure").as_bool();
   default_gain_param_ = this->get_parameter("default_gain").as_int();
   
   // Get auto exposure parameter values
@@ -276,7 +274,7 @@ bool MainCameraDriver::initializeCamera()
     RCLCPP_WARN(this->get_logger(), "Failed to initialize V4L2 controls, using default settings");
   } else {
     // Initialize auto exposure controller if enabled
-    if (enable_auto_exposure_ && !disable_auto_exposure_) {
+    if (enable_auto_exposure_) {
       auto_exposure_controller_.initialize(exposure_min_, exposure_max_, 
                                          target_brightness_, ae_kp_);
       RCLCPP_DEBUG(this->get_logger(), "Auto exposure controller initialized:");
@@ -286,14 +284,10 @@ bool MainCameraDriver::initializeCamera()
                   auto_exposure_update_interval_, fps_ / auto_exposure_update_interval_);
     }
     // Apply parameter settings if specified
-    if (disable_auto_exposure_ || enable_auto_exposure_) {
-      // Use manual mode for either manual control or custom auto exposure
+    if (enable_auto_exposure_) {
+      // Use manual mode for custom auto exposure (we control exposure via PID)
       if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL)) {
-        if (enable_auto_exposure_) {
-          RCLCPP_DEBUG(this->get_logger(), "Disabled camera auto exposure (Manual Mode for custom AE)");
-        } else {
-          RCLCPP_DEBUG(this->get_logger(), "Disabled auto exposure (Manual Mode)");
-        }
+        RCLCPP_DEBUG(this->get_logger(), "Disabled camera auto exposure (Manual Mode for custom AE)");
       }
     } else {
       // Use camera's built-in auto exposure
@@ -509,7 +503,7 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
   }
   
   // Apply auto exposure control (frame is already rotated and downscaled)
-  if (enable_auto_exposure_ && !disable_auto_exposure_ && v4l2_controls_initialized_) {
+  if (enable_auto_exposure_ && v4l2_controls_initialized_) {
     frame_counter_++;
     if (frame_counter_ >= auto_exposure_update_interval_) {
       // Use left half of the already-downscaled frame

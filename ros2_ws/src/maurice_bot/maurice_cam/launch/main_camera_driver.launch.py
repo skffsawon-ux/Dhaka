@@ -95,12 +95,6 @@ def generate_launch_description():
         description='Manual gain value (-1 = use current value, 0-255)'
     )
     
-    disable_auto_exposure_arg = DeclareLaunchArgument(
-        'disable_auto_exposure',
-        default_value='false',
-        description='Disable automatic exposure (true/false)'
-    )
-    
     default_gain_arg = DeclareLaunchArgument(
         'default_gain',
         default_value='110',
@@ -160,7 +154,6 @@ def generate_launch_description():
                 'compressed_frame_interval': LaunchConfiguration('compressed_frame_interval'),
                 'exposure': LaunchConfiguration('exposure'),
                 'gain': LaunchConfiguration('gain'),
-                'disable_auto_exposure': LaunchConfiguration('disable_auto_exposure'),
                 'default_gain': LaunchConfiguration('default_gain'),
                 'enable_auto_exposure': LaunchConfiguration('enable_auto_exposure'),
                 'target_brightness': LaunchConfiguration('target_brightness'),
@@ -189,7 +182,6 @@ def generate_launch_description():
         compressed_frame_interval_arg,
         exposure_arg,
         gain_arg,
-        disable_auto_exposure_arg,
         default_gain_arg,
         enable_auto_exposure_arg,
         target_brightness_arg,

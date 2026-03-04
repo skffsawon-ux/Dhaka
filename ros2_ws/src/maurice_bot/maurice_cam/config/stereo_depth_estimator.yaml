@@ -18,7 +18,6 @@ main_camera_driver:
     publish_stereo: false
     exposure: -1
     gain: -1
-    disable_auto_exposure: false
     default_gain: 110
     enable_auto_exposure: false
     target_brightness: 128.0

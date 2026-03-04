@@ -298,7 +298,6 @@ private:
   bool v4l2_controls_initialized_{false};
   int exposure_setting_{-1};
   int gain_setting_{-1};
-  bool disable_auto_exposure_{false};
   int default_gain_param_{110};
 
   // Auto exposure control
