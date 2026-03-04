@@ -221,7 +221,6 @@ class SkillsActionServer(Node):
             self._reload_skills_selective(skill_ids)
         else:
             self._reload_skills()
-        self._publish_skills_list()
 
     def _build_skill_info(self, skill_id: str, name: str, skill_type: str, guidelines: str,
                           guidelines_when_running: str, inputs_json: str,
