@@ -13,15 +13,13 @@ find_package(std_msgs REQUIRED)
 
 # List your service and message files
 set(srv_files
-  "srv/ManipulationTask.srv"
+  "srv/ActivateManipulationTask.srv"
   "srv/GetChatHistory.srv"
   "srv/GetTaskMetadataList.srv"
   "srv/GetAvailableDirectives.srv"
   "srv/GetTaskMetadata.srv"
   "srv/UpdateTaskMetadata.srv"
   "srv/ResetBrain.srv"
-  "srv/GetAvailableBehaviors.srv"
-  "srv/GetAvailableSkills.srv"
   "srv/ChangeMap.srv"
   "srv/ChangeNavigationMode.srv"
   "srv/SaveMap.srv"
@@ -30,11 +28,14 @@ set(srv_files
   "srv/SetDirectiveOnStartup.srv"
   "srv/LoadEpisode.srv"
   "srv/ReloadSkillsAgents.srv"
+  "srv/CreatePhysicalSkill.srv"
 )
 
 set(msg_files
   "msg/RecorderStatus.msg"
   "msg/ReplayStatus.msg"
+  "msg/SkillInfo.msg"
+  "msg/AvailableSkills.msg"
 )
 
 set(action_files

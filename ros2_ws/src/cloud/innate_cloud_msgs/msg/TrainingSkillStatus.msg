@@ -1,6 +1,6 @@
 # Snapshot of a single skill: its upload progress and runs.
 
-string skill_id
+string training_skill_id
 string skill_name
 string skill_dir            # absolute path on robot, empty if unknown
 

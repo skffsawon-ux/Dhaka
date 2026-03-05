@@ -13,22 +13,8 @@ namespace manipulation {
 TaskManager::TaskManager(const std::string& base_data_directory)
     : base_data_directory_(base_data_directory) {}
 
-void TaskManager::add_skill_directory(const std::string& directory) {
-    // Avoid duplicates
-    if (directory != base_data_directory_ && 
-        std::find(additional_skill_directories_.begin(), additional_skill_directories_.end(), directory) == additional_skill_directories_.end()) {
-        additional_skill_directories_.push_back(directory);
-    }
-}
-
-void TaskManager::start_new_task(const std::string& task_name, double data_frequency,
-                                  const std::string& primitive_type) {
-    // Use default base_data_directory when no explicit directory is provided
-    start_new_task_at_directory(task_name, base_data_directory_ + "/" + task_name, data_frequency, primitive_type);
-}
-
 void TaskManager::start_new_task_at_directory(const std::string& task_name, const std::string& task_directory,
-                                               double data_frequency, const std::string& primitive_type) {
+                                               double data_frequency) {
     current_task_name_ = task_name;
     current_task_dir_ = task_directory;
     std::string data_dir = current_task_dir_ + "/data";
@@ -50,14 +36,6 @@ void TaskManager::start_new_task_at_directory(const std::string& task_name, cons
         {"episodes", nlohmann::json::array()}
     };
     save_metadata();
-    
-    // Create primitive metadata
-    create_primitive_metadata(task_name, primitive_type);
-}
-
-void TaskManager::resume_task(const std::string& task_name) {
-    // Use default base_data_directory when no explicit directory is provided
-    resume_task_at_directory(task_name, base_data_directory_ + "/" + task_name);
 }
 
 void TaskManager::resume_task_at_directory(const std::string& task_name, const std::string& task_directory) {
@@ -66,7 +44,14 @@ void TaskManager::resume_task_at_directory(const std::string& task_name, const s
     std::string metadata_path = current_task_dir_ + "/data/dataset_metadata.json";
     
     if (!fs::exists(metadata_path)) {
-        throw std::runtime_error("Dataset metadata not found for task '" + task_name + "' at " + metadata_path);
+        std::cerr << "No dataset_metadata.json for '" << task_name << "'. Starting fresh." << std::endl;
+        metadata_ = {
+            {"data_frequency", 0},
+            {"number_of_episodes", 0},
+            {"episodes", nlohmann::json::array()}
+        };
+        save_metadata();
+        return;
     }
     load_metadata();
 }
@@ -133,38 +118,16 @@ void TaskManager::load_metadata() {
     
     std::ifstream file(metadata_path);
     if (!file.is_open()) {
-        throw std::runtime_error("Failed to open metadata file: " + metadata_path);
-    }
-    file >> metadata_;
-}
-
-void TaskManager::create_primitive_metadata(const std::string& task_name, const std::string& primitive_type) {
-    if (current_task_dir_.empty()) {
-        throw std::runtime_error("No active task directory to create primitive metadata.");
-    }
-
-    std::string primitive_metadata_path = current_task_dir_ + "/metadata.json";
-    
-    if (fs::exists(primitive_metadata_path)) {
-        std::cout << "Primitive metadata.json already exists for '" << task_name << "'. Skipping creation." << std::endl;
+        std::cerr << "Cannot open " << metadata_path << ". Reinitializing metadata." << std::endl;
+        metadata_ = {
+            {"data_frequency", 0},
+            {"number_of_episodes", 0},
+            {"episodes", nlohmann::json::array()}
+        };
+        save_metadata();
         return;
     }
-
-    nlohmann::json primitive_metadata = {
-        {"name", task_name},
-        {"type", primitive_type},
-        {"guidelines", ""},
-        {"guidelines_when_running", ""},
-        {"inputs", nlohmann::json::object()},
-        {"execution", nlohmann::json::object()}
-    };
-
-    std::ofstream file(primitive_metadata_path);
-    if (!file.is_open()) {
-        throw std::runtime_error("Failed to create primitive metadata file: " + primitive_metadata_path);
-    }
-    file << primitive_metadata.dump(4);
-    std::cout << "Created primitive metadata.json for '" << task_name << "' (type: " << primitive_type << ")" << std::endl;
+    file >> metadata_;
 }
 
 std::optional<nlohmann::json> TaskManager::get_enriched_metadata_for_task(const std::string& task_directory,
@@ -173,23 +136,37 @@ std::optional<nlohmann::json> TaskManager::get_enriched_metadata_for_task(const 
     std::string metadata_file_path = data_dir + "/dataset_metadata.json";
     std::string task_name = fs::path(task_directory).filename().string();
 
-    if (!fs::exists(task_directory) || !fs::is_directory(task_directory)) {
-        error_msg = "Task directory " + task_directory + " not found or is not a directory.";
-        return std::nullopt;
+    // Helper: return a zero-episode response for any "no data yet" state.
+    auto empty_metadata = [&]() -> nlohmann::json {
+        return {
+            {"task_name", task_name},
+            {"task_directory", task_directory},
+            {"data_frequency", 0},
+            {"number_of_episodes", 0},
+            {"episodes", nlohmann::json::array()}
+        };
+    };
+
+    // No data yet — folder missing, no data/ subfolder, no metadata file, or empty file.
+    if (!fs::exists(task_directory) || !fs::is_directory(task_directory) ||
+        !fs::exists(data_dir) || !fs::is_directory(data_dir) ||
+        !fs::exists(metadata_file_path) || fs::file_size(metadata_file_path) == 0) {
+        return empty_metadata();
     }
 
-    if (!fs::exists(metadata_file_path)) {
-        error_msg = "dataset_metadata.json not found in " + data_dir + ".";
-        return std::nullopt;
-    }
-
+    // Try to parse — only error if the file is actually corrupted.
     nlohmann::json dataset_metadata;
     try {
         std::ifstream file(metadata_file_path);
         file >> dataset_metadata;
     } catch (const std::exception& e) {
-        error_msg = "Error reading dataset_metadata.json in " + data_dir + ": " + e.what();
+        error_msg = "Corrupted dataset_metadata.json in " + data_dir + ": " + e.what();
         return std::nullopt;
+    }
+
+    // Parsed OK but null / not an object — treat as empty, not corrupted.
+    if (dataset_metadata.is_null() || !dataset_metadata.is_object()) {
+        return empty_metadata();
     }
 
     nlohmann::json processed_episodes = nlohmann::json::array();
@@ -238,40 +215,6 @@ std::optional<nlohmann::json> TaskManager::get_enriched_metadata_for_task(const 
     return enriched_metadata;
 }
 
-std::vector<nlohmann::json> TaskManager::get_all_tasks_summary() {
-    std::vector<nlohmann::json> all_tasks_summary;
-    
-    // Collect all directories to scan
-    std::vector<std::string> directories_to_scan;
-    directories_to_scan.push_back(base_data_directory_);
-    for (const auto& dir : additional_skill_directories_) {
-        directories_to_scan.push_back(dir);
-    }
-
-    for (const auto& scan_dir : directories_to_scan) {
-        if (!fs::exists(scan_dir) || !fs::is_directory(scan_dir)) {
-            std::cerr << "Skill directory " << scan_dir << " does not exist or is not a directory." << std::endl;
-            continue;
-        }
-
-        for (const auto& entry : fs::directory_iterator(scan_dir)) {
-            if (!entry.is_directory()) continue;
-
-            std::string error_msg;
-            auto metadata_opt = get_enriched_metadata_for_task(entry.path().string(), error_msg);
-
-            if (metadata_opt) {
-                all_tasks_summary.push_back(*metadata_opt);
-            } else if (!error_msg.empty()) {
-                std::cerr << "Skipping task directory " << entry.path().filename().string() 
-                          << " due to error: " << error_msg << std::endl;
-            }
-        }
-    }
-
-    return all_tasks_summary;
-}
-
 std::tuple<bool, std::string, std::string> TaskManager::get_task_metadata_by_directory(const std::string& task_directory) {
     std::string error_msg;
     auto metadata_opt = get_enriched_metadata_for_task(task_directory, error_msg);
@@ -283,43 +226,6 @@ std::tuple<bool, std::string, std::string> TaskManager::get_task_metadata_by_dir
             return {false, "Task at directory '" + task_directory + "' not found.", "{}"};
         }
         return {false, error_msg, "{}"};
-    }
-}
-
-std::tuple<bool, std::string> TaskManager::update_task_metadata_by_directory(const std::string& task_directory,
-                                                                               const std::string& json_metadata_update) {
-    std::string metadata_file_path = task_directory + "/metadata.json";
-
-    if (!fs::exists(task_directory) || !fs::is_directory(task_directory)) {
-        return {false, "Task directory '" + task_directory + "' not found or is not a directory."};
-    }
-
-    if (!fs::exists(metadata_file_path)) {
-        return {false, "Metadata file for task at '" + task_directory + "' not found."};
-    }
-
-    nlohmann::json update_data;
-    try {
-        update_data = nlohmann::json::parse(json_metadata_update);
-    } catch (const std::exception& e) {
-        return {false, std::string("Invalid JSON format in update: ") + e.what()};
-    }
-
-    try {
-        std::ifstream infile(metadata_file_path);
-        nlohmann::json metadata;
-        infile >> metadata;
-        infile.close();
-
-        for (auto& [key, value] : update_data.items()) {
-            metadata[key] = value;
-        }
-
-        std::ofstream outfile(metadata_file_path);
-        outfile << metadata.dump(4);
-        return {true, "Metadata updated successfully."};
-    } catch (const std::exception& e) {
-        return {false, std::string("Failed to read or write metadata at ") + task_directory + ": " + e.what()};
     }
 }
 

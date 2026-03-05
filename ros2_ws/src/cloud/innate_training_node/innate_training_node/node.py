@@ -244,7 +244,7 @@ class TrainingNode(Node):
             return res
 
         try:
-            gen = self._mgr.submit(req.skill_dir, name=req.name or None)
+            gen = self._mgr.submit(req.skill_dir)
             skill: SkillInfo | None = None
             try:
                 while True:
@@ -258,6 +258,11 @@ class TrainingNode(Node):
 
             self._store.put_skill(skill)
             self._store.register_dir(skill.skill_id, req.skill_dir)
+
+            # Mark upload as pending *before* spawning the thread and
+            # returning the response, so the next published status already
+            # reflects has_active_transfer=true / transfer_done=false.
+            self._store.mark_upload_pending(skill.skill_id)
 
             # Start upload in a background thread.
             self.get_logger().info(

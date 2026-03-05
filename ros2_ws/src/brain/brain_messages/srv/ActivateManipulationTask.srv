@@ -1,0 +1,7 @@
+# brain_messages/srv/ActivateManipulationTask.srv
+
+# Request
+string task_directory   # Absolute path to the skill directory (must already exist)
+---
+# Response
+bool success

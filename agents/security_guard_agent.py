@@ -21,11 +21,11 @@ class SecurityGuardAgent(Agent):
         return "assets/security_guard.png"
 
     def get_skills(self) -> List[str]:
-        """Return the list of primitives this directive can use"""
+        """Return the list of skill IDs this directive can use"""
         return [
-            "navigate_to_position",
-            "open_door",
-            "send_email",
+            "innate-os/navigate_to_position",
+            "innate-os/open_door",
+            "innate-os/send_email",
         ]
 
     def get_inputs(self) -> List[str]:

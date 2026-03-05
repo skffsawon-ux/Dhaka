@@ -233,7 +233,7 @@ class PhysicalSkill(Skill):
     Base class for skills that execute physical behaviors via the ExecuteBehavior action server.
 
     Subclasses only need to define:
-    - behavior_name: The name of the behavior to execute on the action server
+    - skill_dir: Absolute path to the behavior directory to execute
     - display_name: Human-readable name for logging and messages
     - success_feedback_message: Message to send after successful completion
     - guidelines(): Method returning usage guidelines
@@ -243,14 +243,14 @@ class PhysicalSkill(Skill):
     def __init__(
         self,
         logger,
-        behavior_name: str,
+        skill_dir: str,
         display_name: str,
         success_feedback_message: str,
     ):
         super().__init__(logger)
         self._action_client = None
         self._goal_handle = None
-        self.behavior_name = behavior_name
+        self.skill_dir = skill_dir
         self.display_name = display_name
         self.success_feedback_message = success_feedback_message
 
@@ -288,7 +288,7 @@ class PhysicalSkill(Skill):
             return "ExecuteBehavior action server not available", SkillResult.FAILURE
 
         goal_msg = ExecuteBehavior.Goal()
-        goal_msg.behavior_name = self.behavior_name
+        goal_msg.skill_dir = self.skill_dir
 
         self.logger.info("Sending goal to ExecuteBehavior action server...")
         goal_future = self._action_client.send_goal_async(goal_msg, feedback_callback=self.feedback_callback)

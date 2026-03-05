@@ -1,5 +1,5 @@
 # Request
-string behavior_name
+string skill_dir  # Absolute path to skill directory
 string behavior_config  # JSON-encoded behavior configuration from metadata.json
 ---
 # Result

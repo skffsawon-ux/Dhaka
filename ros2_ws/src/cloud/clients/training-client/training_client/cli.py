@@ -194,9 +194,8 @@ def cli(ctx: click.Context, server: str, token: str, issuer: str) -> None:
 
 @cli.command()
 @click.argument("skill_dir", type=click.Path(exists=True, file_okay=False), default=".")
-@click.option("--name", default=None, help="Skill name (default: directory name)")
 @click.pass_context
-def submit(ctx: click.Context, skill_dir: str, name: str | None) -> None:
+def submit(ctx: click.Context, skill_dir: str) -> None:
     """Create (or reuse) a skill from SKILL_DIR.
 
     If SKILL_DIR/metadata.json already has a training_skill_id, prints the existing ID.
@@ -206,7 +205,7 @@ def submit(ctx: click.Context, skill_dir: str, name: str | None) -> None:
     manager = _make_manager(ctx)
 
     click.echo(f"Registering skill from {skill_dir}")
-    gen = manager.submit(skill_dir, name=name)
+    gen = manager.submit(skill_dir)
     _print_progress(gen)
     click.echo("Done!")
 

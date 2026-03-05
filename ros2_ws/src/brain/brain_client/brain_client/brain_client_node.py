@@ -56,12 +56,12 @@ from brain_messages.action import ExecuteSkill
 from brain_messages.srv import GetAvailableDirectives
 from brain_messages.srv import ResetBrain
 from brain_messages.srv import SetDirectiveOnStartup
-from brain_messages.srv import GetAvailableSkills
+from brain_messages.msg import AvailableSkills
 from brain_messages.srv import ReloadSkillsAgents
 from std_srvs.srv import SetBool, Trigger
 
 from brain_client.ws_bridge import WSBridge
-from brain_client.initializers import initialize_skills, initialize_agents
+from brain_client.initializers import initialize_agents
 from brain_client.tts_handler import TTSHandler
 from brain_client.hot_reload_watcher import HotReloadWatcher
 
@@ -77,6 +77,19 @@ def _get_gaze_tracker_class():
 
         ROSPersonTracker = _ROSPersonTracker
     return ROSPersonTracker
+
+
+class _MockPrimitive:
+    """Lightweight stand-in used by BrainClient to hold skill metadata."""
+
+    def __init__(self, meta: dict):
+        self.metadata = meta
+
+    def guidelines(self):
+        return self.metadata.get("guidelines", "")
+
+    def guidelines_when_running(self):
+        return self.metadata.get("guidelines_when_running", "")
 
 
 class BrainClientNode(Node):
@@ -466,9 +479,6 @@ class BrainClientNode(Node):
         self._reload_primitives_client = self._service_call_node.create_client(
             Trigger, "/brain/reload_primitives"
         )
-        self._get_skills_client_sync = self._service_call_node.create_client(
-            GetAvailableSkills, "/brain/get_available_skills"
-        )
 
         # Service client for selective skill reload (calls PEAS)
         self._reload_skills_client = self._service_call_node.create_client(
@@ -551,14 +561,31 @@ class BrainClientNode(Node):
             )
             time.sleep(1.0)
 
-        # Initialize primitives - query from skills_action_server
-        self.primitives_dict = self._query_available_primitives()
+        # Subscribe to available_skills topic from skills_action_server (latched / transient_local)
+        self._skills_qos = QoSProfile(
+            depth=1,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+        )
+        self._available_skills_sub = self.create_subscription(
+            AvailableSkills,
+            "/brain/available_skills",
+            self._on_available_skills,
+            self._skills_qos,
+        )
+
+        # Wait for first skills message from SAS (transient_local will replay last)
+        self.primitives_dict = {}
+        self.primitives_metadata_list = []
+        self._name_to_id = {}
+        self._id_to_name = {}
+        self.get_logger().info("Waiting for /brain/available_skills topic...")
+        deadline = time.time() + 25.0
+        while not self.primitives_dict and time.time() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.5)
         if not self.primitives_dict:
             self.get_logger().warn(
-                "No primitives available from skills_action_server, using fallback local loading"
-            )
-            self.primitives_dict = initialize_skills(
-                self.get_logger(), self.simulator_mode
+                "No primitives received from /brain/available_skills after 25s"
             )
 
         self.directives, self.current_directive = initialize_agents(
@@ -591,6 +618,7 @@ class BrainClientNode(Node):
         self._update_gaze_tracker()
 
         self.primitive_running = None
+        self._pending_reregistration = False
         # Add a variable to store the current goal handle
         self._goal_handle = None
 
@@ -615,7 +643,7 @@ class BrainClientNode(Node):
         # Register the primitives with the server
         self.register_primitives_and_directive()
 
-        # Initialize hot reload file watcher
+        # Initialize hot reload file watcher (agents only — skills watched by SAS)
         self._hot_reload_pending = None  # (skill_names, agent_names) tuple
         self._hot_reload_lock = threading.Lock()
         innate_root = os.environ.get(
@@ -623,10 +651,7 @@ class BrainClientNode(Node):
         )
         self._hot_reload_watcher = HotReloadWatcher(
             logger=self.get_logger(),
-            skills_directories=[
-                os.path.join(innate_root, "skills"),
-                os.path.join(os.path.expanduser("~"), "skills"),
-            ],
+            skills_directories=[],  # Skills hot reload is handled by SAS
             agents_directories=[
                 os.path.join(innate_root, "agents"),
                 os.path.join(os.path.expanduser("~"), "agents"),
@@ -641,79 +666,66 @@ class BrainClientNode(Node):
             "\033[1;92m[BrainClient] BrainClientNode initialized\033[0m"
         )
 
-    def _query_available_primitives(self):
-        """
-        Query available primitives from skills_action_server.
-        Returns a dict of primitive names mapped to their metadata (for directive validation and registration).
-        """
-        # Use helper node's client for synchronous calls (works from callbacks)
-        client = self._get_skills_client_sync
+    def _on_available_skills(self, msg: AvailableSkills):
+        """Callback for /brain/available_skills topic (latched, transient_local)."""
+        primitives_list = []
+        primitives_dict = {}  # keyed by skill ID
+        name_to_id = {}
+        id_to_name = {}
 
-        # Wait for service to be available
-        self.get_logger().info("Waiting for /brain/get_available_skills service...")
-        if not client.wait_for_service(timeout_sec=10.0):
-            self.get_logger().error(
-                "Timeout waiting for /brain/get_available_skills service"
-            )
-            return {}
+        for skill_info in msg.skills:
+            metadata = {
+                "id": skill_info.id,
+                "name": skill_info.name,
+                "type": skill_info.type,
+                "guidelines": skill_info.guidelines,
+                "guidelines_when_running": skill_info.guidelines_when_running,
+                "inputs": json.loads(skill_info.inputs_json) if skill_info.inputs_json else {},
+                "in_training": skill_info.in_training,
+                "episode_count": skill_info.episode_count,
+                "directory": skill_info.directory,
+            }
+            primitives_list.append(metadata)
 
-        # Call service via helper node (not registered with any executor)
-        request = GetAvailableSkills.Request()
-        future = client.call_async(request)
-        rclpy.spin_until_future_complete(
-            self._service_call_node, future, timeout_sec=10.0
+            primitives_dict[skill_info.id] = _MockPrimitive(metadata)
+            if skill_info.name in name_to_id:
+                self.get_logger().warn(
+                    f"Duplicate skill name '{skill_info.name}': "
+                    f"ID '{name_to_id[skill_info.name]}' overwritten by '{skill_info.id}'"
+                )
+            name_to_id[skill_info.name] = skill_info.id
+            id_to_name[skill_info.id] = skill_info.name
+
+        self.primitives_metadata_list = primitives_list
+        self.primitives_dict = primitives_dict
+        self._name_to_id = name_to_id
+        self._id_to_name = id_to_name
+
+        code_count = sum(1 for s in msg.skills if s.type == "code")
+        learned_count = sum(1 for s in msg.skills if s.type == "learned")
+        replay_count = sum(1 for s in msg.skills if s.type == "replay")
+        self.get_logger().info(
+            f"Received {len(primitives_dict)} skills from topic: "
+            f"{code_count} code, {learned_count} learned, {replay_count} replay"
         )
 
-        if not future.done():
-            self.get_logger().error("Service call timeout")
-            return {}
+        # Re-register primitives with the cloud agent server if already registered
+        if hasattr(self, 'primitives_registered') and self.primitives_registered:
+            if not self.primitive_running:
+                self.register_primitives_and_directive()
+            else:
+                self.get_logger().info(
+                    "Deferring primitives re-registration — a skill is currently running"
+                )
+                self._pending_reregistration = True
 
-        try:
-            response = future.result()
-            primitives_list = json.loads(response.skills_json)
-
-            # Store the full primitives list for later use in registration
-            self.primitives_metadata_list = primitives_list
-
-            # Create a simple dict with primitive instances (mock objects with metadata)
-            primitives_dict = {}
-            for prim in primitives_list:
-                # Create a mock primitive object that has guidelines methods
-                class MockPrimitive:
-                    def __init__(self, metadata):
-                        self.metadata = metadata
-
-                    def guidelines(self):
-                        return self.metadata.get("guidelines", "")
-
-                    def guidelines_when_running(self):
-                        return self.metadata.get("guidelines_when_running", "")
-
-                primitives_dict[prim["name"]] = MockPrimitive(prim)
-
-            # Log validation status
-            learned_count = sum(
-                1 for prim in primitives_list if prim.get("type") == "learned"
-            )
-            replay_count = sum(
-                1 for prim in primitives_list if prim.get("type") == "replay"
-            )
-            code_count = sum(
-                1 for prim in primitives_list if prim.get("type") == "code"
-            )
-
-            self.get_logger().info(
-                f"Loaded {len(primitives_dict)} validated primitives from service: {list(primitives_dict.keys())}"
-            )
-            self.get_logger().info(
-                f"Primitive types: {code_count} code, {learned_count} learned, {replay_count} replay"
-            )
-
-            return primitives_dict
-
-        except Exception as e:
-            self.get_logger().error(f"Error parsing primitives service response: {e}")
-            return {}
+    def _drain_pending_reregistration(self):
+        """Re-register primitives if a re-registration was deferred during skill execution."""
+        if self._pending_reregistration:
+            self._pending_reregistration = False
+            if hasattr(self, 'primitives_registered') and self.primitives_registered:
+                self.get_logger().info("Draining deferred primitives re-registration")
+                self.register_primitives_and_directive()
 
     def _wait_for_input_manager(self, timeout_sec=5.0):
         """
@@ -1574,14 +1586,23 @@ class BrainClientNode(Node):
         primitive_name: str,
         primitive_id: typing.Optional[str],
         status: str,
+        skill_id: typing.Optional[str] = None,
         reason: typing.Optional[str] = None,
     ):
-        """Publish local task status updates for controller app UI."""
+        """Publish local task status updates for controller app UI.
+
+        Args:
+            primitive_name: Display name of the skill (cosmetic).
+            primitive_id:   UUID assigned by the agent for this task instance.
+            status:         One of "running", "failed", "interrupted", etc.
+            skill_id:       Deterministic skill ID (e.g. "innate-os/send_email").
+            reason:         Optional human-readable reason string.
+        """
         payload = {
             "primitive_name": primitive_name,
             "primitive_id": primitive_id,
             "skill_name": primitive_name,
-            "skill_id": primitive_id,
+            "skill_id": skill_id or primitive_id,
             "status": status,
             "timestamp": time.time(),
         }
@@ -1652,11 +1673,23 @@ class BrainClientNode(Node):
 
             if payload.next_task.type in self.primitives_dict:
                 self._pause_gaze()  # Pause gaze during skill execution
+                skill_id = payload.next_task.type  # already an ID
+            elif payload.next_task.type in self._name_to_id:
+                self._pause_gaze()
+                skill_id = self._name_to_id[payload.next_task.type]  # LLM sent name → translate
+            else:
+                self.get_logger().warn(
+                    f"Unknown primitive type: {payload.next_task.type}"
+                )
+                skill_id = None
+
+            if skill_id is not None:
+                skill_name = self._id_to_name.get(skill_id, payload.next_task.type)
 
                 # Apply pose compensation for local navigation commands
                 task_inputs = payload.next_task.inputs
                 if (
-                    payload.next_task.type == "navigate_to_position"
+                    skill_id == "innate-os/navigate_to_position"
                     and task_inputs.get("local_frame", False)
                     and self.pose_at_image_send is not None
                 ):
@@ -1677,25 +1710,27 @@ class BrainClientNode(Node):
                         )
 
                 self.send_primitive_goal(
-                    payload.next_task.type,
+                    skill_id,
                     task_inputs,
                 )
                 status_msg = MessageIn(
                     type=MessageInType.PRIMITIVE_ACTIVATED,
                     payload={
-                        "primitive_name": payload.next_task.type,
+                        "primitive_name": skill_name,
                         "primitive_id": payload.next_task.primitive_id,
                     },
                 )
                 self.ws_bridge.send_message(status_msg)
                 self._publish_task_status(
-                    primitive_name=payload.next_task.type,
+                    primitive_name=skill_name,
                     primitive_id=payload.next_task.primitive_id,
                     status="running",
+                    skill_id=skill_id,
                 )
                 self.primitive_running = {
-                    "primitive_name": payload.next_task.type,
+                    "primitive_name": skill_name,
                     "primitive_id": payload.next_task.primitive_id,
+                    "skill_id": skill_id,
                 }
             else:
                 self.get_logger().warn(
@@ -1973,11 +2008,13 @@ class BrainClientNode(Node):
                     primitive_name=self.primitive_running["primitive_name"],
                     primitive_id=self.primitive_running["primitive_id"],
                     status="failed",
+                    skill_id=self.primitive_running.get("skill_id"),
                     reason="Goal rejected by action server",
                 )
             self.primitive_running = None
             self._goal_handle = None
             self._resume_gaze()
+            self._drain_pending_reregistration()
             return
         # Store the goal handle for potential cancellation, using the same naming as in the example
         self._goal_handle = goal_handle
@@ -2021,24 +2058,19 @@ class BrainClientNode(Node):
         self.cmd_vel_pub.publish(stop_cmd)
 
         # --- Send status message FIRST ---
-        # Get primitive info from the primitive_running dictionary
+        # result.skill_type is the skill ID; get the cosmetic name
+        skill_id = result.skill_type
+        primitive_name = self._id_to_name.get(skill_id, skill_id)
         primitive_id = None
-        primitive_name = result.skill_type  # Use name from result
-        if (
-            self.primitive_running
-            and self.primitive_running["primitive_name"] == primitive_name
-        ):
+        if self.primitive_running:
             primitive_id = self.primitive_running["primitive_id"]
-        elif self.primitive_running:
-            self.get_logger().warn(
-                f"Primitive name mismatch in result ({primitive_name}) and running ({self.primitive_running['primitive_name']})"
-            )
-            primitive_id = self.primitive_running[
-                "primitive_id"
-            ]  # Use stored ID anyway?
-
+            if self.primitive_running.get("skill_id") != skill_id:
+                self.get_logger().warn(
+                    f"Skill ID mismatch in result ({skill_id}) and running ({self.primitive_running.get('skill_id')})"
+                )
         self.primitive_running = None  # Clear running state
         self._resume_gaze()  # Resume gaze after skill execution
+        self._drain_pending_reregistration()
 
         # Determine the appropriate message type based on the result
         self.get_logger().info(f"Primitive result details: {result}")
@@ -2092,6 +2124,7 @@ class BrainClientNode(Node):
                 primitive_name=primitive_name,
                 primitive_id=primitive_id,
                 status=local_status,
+                skill_id=skill_id,
                 reason=local_reason,
             )
 
@@ -2106,24 +2139,38 @@ class BrainClientNode(Node):
             )
             pending_task = self._pending_next_task
             self._pending_next_task = None  # Clear before sending new goal
-            status_msg = MessageIn(
-                type=MessageInType.PRIMITIVE_ACTIVATED,
-                payload={
-                    "primitive_name": pending_task.type,
+
+            # Translate LLM name → skill ID
+            if pending_task.type in self._name_to_id:
+                pending_skill_id = self._name_to_id[pending_task.type]
+            elif pending_task.type in self.primitives_dict:
+                pending_skill_id = pending_task.type  # already an ID
+            else:
+                self.get_logger().warn(f"Unknown pending primitive: {pending_task.type}")
+                pending_skill_id = None
+
+            if pending_skill_id is not None:
+                pending_name = self._id_to_name.get(pending_skill_id, pending_task.type)
+                status_msg = MessageIn(
+                    type=MessageInType.PRIMITIVE_ACTIVATED,
+                    payload={
+                        "primitive_name": pending_name,
+                        "primitive_id": pending_task.primitive_id,
+                    },
+                )
+                self.ws_bridge.send_message(status_msg)
+                self._publish_task_status(
+                    primitive_name=pending_name,
+                    primitive_id=pending_task.primitive_id,
+                    status="running",
+                    skill_id=pending_skill_id,
+                )
+                self.primitive_running = {
+                    "primitive_name": pending_name,
                     "primitive_id": pending_task.primitive_id,
-                },
-            )
-            self.ws_bridge.send_message(status_msg)
-            self._publish_task_status(
-                primitive_name=pending_task.type,
-                primitive_id=pending_task.primitive_id,
-                status="running",
-            )
-            self.primitive_running = {
-                "primitive_name": pending_task.type,
-                "primitive_id": pending_task.primitive_id,
-            }
-            self.send_primitive_goal(pending_task.type, pending_task.inputs)
+                    "skill_id": pending_skill_id,
+                }
+                self.send_primitive_goal(pending_skill_id, pending_task.inputs)
         elif self._pending_next_task is not None:
             # Clear pending task if the goal finished differently (SUCCESS/FAILURE)
             self.get_logger().warn(
@@ -2211,7 +2258,7 @@ class BrainClientNode(Node):
             )
             primitives = []
             if self.primitives_dict:
-                for primitive_name, primitive in self.primitives_dict.items():
+                for skill_id, primitive in self.primitives_dict.items():
                     # Extract parameter information using introspection
                     params = {}
                     if hasattr(primitive, "execute"):
@@ -2247,7 +2294,8 @@ class BrainClientNode(Node):
 
                     primitives.append(
                         {
-                            "name": primitive_name,
+                            "id": skill_id,
+                            "name": self._id_to_name.get(skill_id, skill_id),
                             "guidelines": primitive.guidelines(),
                             "guidelines_when_running": primitive.guidelines_when_running(),
                             "inputs": params,
@@ -2255,7 +2303,7 @@ class BrainClientNode(Node):
                     )
 
         included_primitives = [
-            p for p in primitives if p["name"] in self.current_directive.get_skills()
+            p for p in primitives if p["id"] in self.current_directive.get_skills()
         ]
 
         # Create and send the registration message
@@ -2505,9 +2553,7 @@ class BrainClientNode(Node):
                         if peas_result.success:
                             reloaded_skills = list(peas_result.reloaded_skills)
                             self.get_logger().info(f"PEAS selective reload: {peas_result.message}")
-                            
-                            # Update local primitives_dict with reloaded skills
-                            self._update_primitives_after_selective_reload(reloaded_skills)
+                            # primitives_dict updated automatically via /brain/available_skills topic
                         else:
                             self.get_logger().warn(f"PEAS selective reload failed: {peas_result.message}")
                     else:
@@ -2569,17 +2615,6 @@ class BrainClientNode(Node):
             self._perform_reload_selective(skill_names, agent_names)
         except Exception as e:
             self.get_logger().error(f"Hot reload failed: {e}")
-
-    def _update_primitives_after_selective_reload(self, reloaded_skill_names: list):
-        """Update local primitives_dict after skills were reloaded in PEAS."""
-        # Re-query the full list from PEAS to get updated metadata
-        updated_primitives = self._query_available_primitives()
-        
-        # Only update the primitives that were reloaded
-        for skill_name in reloaded_skill_names:
-            if skill_name in updated_primitives:
-                self.primitives_dict[skill_name] = updated_primitives[skill_name]
-                self.get_logger().debug(f"Updated primitive: {skill_name}")
 
     def _reload_agents_selective(self, agent_names: list) -> list:
         """
@@ -2665,17 +2700,18 @@ class BrainClientNode(Node):
                     self.get_logger().warn("PEAS reload timed out")
             else:
                 self.get_logger().warn(
-                    "PEAS reload service not available, using local primitive loading"
+                    "PEAS reload service not available"
                 )
 
-            # Re-query primitives from PEAS (or load locally if PEAS unavailable)
-            self.primitives_dict = self._query_available_primitives()
+            # Wait briefly for updated skills list via /brain/available_skills topic
+            # (SAS publishes after reload, transient_local delivers to our callback)
+            deadline = time.time() + 5.0
+            while not self.primitives_dict and time.time() < deadline:
+                rclpy.spin_once(self, timeout_sec=0.2)
+
             if not self.primitives_dict:
                 self.get_logger().warn(
-                    "No primitives from PEAS, using fallback local loading"
-                )
-                self.primitives_dict = initialize_skills(
-                    self.get_logger(), self.simulator_mode
+                    "No primitives received from topic after reload"
                 )
 
             # Reload directives locally
@@ -2738,6 +2774,7 @@ class BrainClientNode(Node):
                 primitive_name=self.primitive_running["primitive_name"],
                 primitive_id=self.primitive_running["primitive_id"],
                 status="interrupted",
+                skill_id=self.primitive_running.get("skill_id"),
             )
             self._goal_handle = None  # Clear after requesting cancel
 
@@ -2985,7 +3022,24 @@ def main(args=None):
     rclpy.init(args=args)
     node = BrainClientNode()
     try:
-        rclpy.spin(node)
+        # Use a manual spin loop so transient deserialization errors
+        # (e.g. corrupted CompressedImage or type-hash mismatches) are
+        # logged and skipped instead of crashing the whole node.
+        while rclpy.ok():
+            try:
+                rclpy.spin_once(node, timeout_sec=0.1)
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                # Catch RCLError (deserialization failures from corrupted
+                # messages, type-hash mismatches, etc.) without killing the
+                # node.  Re-raise anything that isn't an RCL-layer error.
+                if "RCLError" in type(e).__name__:
+                    node.get_logger().warn(
+                        f"Skipping deserialization error (message dropped): {e}"
+                    )
+                else:
+                    raise
     except KeyboardInterrupt:
         node.get_logger().info("KeyboardInterrupt, shutting down.")
     finally:

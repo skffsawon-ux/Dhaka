@@ -3,7 +3,7 @@ Integration test: Cross-node skill discovery and execution.
 
 Uses the standard ROS2 launch_testing framework to:
   - Launch the skills_action_server node with real default skills
-  - Run active tests that discover skills (GetAvailableSkills service)
+  - Run active tests that discover skills (/brain/available_skills topic)
     and execute one (ExecuteSkill action) across nodes
   - Verify clean shutdown via post-shutdown exit code checks
 
@@ -25,19 +25,21 @@ import launch_testing.asserts
 import pytest
 import rclpy
 from brain_messages.action import ExecuteSkill
-from brain_messages.srv import GetAvailableSkills
+from brain_messages.msg import AvailableSkills
 from rclpy.action import ActionClient
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 
 # Skills that MUST load in a headless Docker container (no hardware, no external APIs).
 # These have no blocking __init__ and no missing module-level imports.
+# Values are deterministic skill IDs (innate-os/<file_stem>).
 REQUIRED_SKILLS = {
-    "send_email",
-    "send_picture_via_email",
-    "retrieve_emails",
-    "arm_circle_motion",
-    "arm_move_to_xyz",
-    "arm_zero_position",
-    "scan_for_objects",
+    "innate-os/send_email",
+    "innate-os/send_picture_via_email",
+    "innate-os/retrieve_emails",
+    "innate-os/arm_circle_motion",
+    "innate-os/arm_move_to_xyz",
+    "innate-os/arm_zero_position",
+    "innate-os/scan_for_objects",
 }
 
 
@@ -92,70 +94,66 @@ class TestSkillDiscovery(unittest.TestCase):
     def tearDown(self):
         self.node.destroy_node()
 
-    def test_default_skills_are_discovered(self):
-        """GetAvailableSkills returns at least the required default skills."""
-        client = self.node.create_client(GetAvailableSkills, "/brain/get_available_skills")
+    def _wait_for_skills(self, timeout_sec=30.0):
+        """Subscribe to /brain/available_skills and wait for a message."""
+        qos = QoSProfile(
+            depth=1,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+        )
+        received = []
+
+        def callback(msg):
+            received.append(msg)
+
+        sub = self.node.create_subscription(
+            AvailableSkills, "/brain/available_skills", callback, qos
+        )
         try:
-            self.assertTrue(
-                client.wait_for_service(timeout_sec=30.0),
-                "GetAvailableSkills service not available",
-            )
-
-            request = GetAvailableSkills.Request()
-            request.include_in_training = False
-
-            future = client.call_async(request)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=10.0)
-            self.assertTrue(future.done(), "GetAvailableSkills call timed out")
-
-            response = future.result()
-            skills = json.loads(response.skills_json)
-            skill_names = {s["name"] for s in skills}
-
-            self.assertGreaterEqual(
-                len(skills),
-                len(REQUIRED_SKILLS),
-                f"Expected at least {len(REQUIRED_SKILLS)} skills, got {len(skills)}: {sorted(skill_names)}",
-            )
-
-            missing = REQUIRED_SKILLS - skill_names
-            self.assertFalse(
-                missing,
-                f"Missing required skills: {sorted(missing)}. Available: {sorted(skill_names)}",
-            )
-
-            # Verify they are all code type
-            for skill in skills:
-                if skill["name"] in REQUIRED_SKILLS:
-                    self.assertEqual(
-                        skill.get("type"),
-                        "code",
-                        f"Skill '{skill['name']}' should be type 'code', got '{skill.get('type')}'",
-                    )
+            deadline = time.time() + timeout_sec
+            while not received and time.time() < deadline:
+                rclpy.spin_once(self.node, timeout_sec=0.5)
+            self.assertTrue(received, "No AvailableSkills message received")
+            return received[0]
         finally:
-            self.node.destroy_client(client)
+            self.node.destroy_subscription(sub)
+
+    def test_default_skills_are_discovered(self):
+        """AvailableSkills topic returns at least the required default skills."""
+        msg = self._wait_for_skills()
+        skill_ids = {s.id for s in msg.skills}
+
+        self.assertGreaterEqual(
+            len(msg.skills),
+            len(REQUIRED_SKILLS),
+            f"Expected at least {len(REQUIRED_SKILLS)} skills, got {len(msg.skills)}: {sorted(skill_ids)}",
+        )
+
+        missing = REQUIRED_SKILLS - skill_ids
+        self.assertFalse(
+            missing,
+            f"Missing required skills: {sorted(missing)}. Available: {sorted(skill_ids)}",
+        )
+
+        # Verify they are all code type
+        for skill in msg.skills:
+            if skill.id in REQUIRED_SKILLS:
+                self.assertEqual(
+                    skill.type,
+                    "code",
+                    f"Skill '{skill.id}' should be type 'code', got '{skill.type}'",
+                )
 
     def test_send_email_has_correct_inputs(self):
         """send_email skill exposes subject, message, and recipients parameters."""
-        client = self.node.create_client(GetAvailableSkills, "/brain/get_available_skills")
-        try:
-            self.assertTrue(client.wait_for_service(timeout_sec=30.0))
+        msg = self._wait_for_skills()
+        send_email = next((s for s in msg.skills if s.id == "innate-os/send_email"), None)
 
-            request = GetAvailableSkills.Request()
-            future = client.call_async(request)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=10.0)
-            self.assertTrue(future.done())
-
-            skills = json.loads(future.result().skills_json)
-            send_email = next((s for s in skills if s["name"] == "send_email"), None)
-
-            self.assertIsNotNone(send_email, "send_email skill not found")
-            inputs = send_email.get("inputs", {})
-            self.assertIn("subject", inputs)
-            self.assertIn("message", inputs)
-            self.assertIn("recipients", inputs)
-        finally:
-            self.node.destroy_client(client)
+        self.assertIsNotNone(send_email, "innate-os/send_email skill not found")
+        inputs = json.loads(send_email.inputs_json) if send_email.inputs_json else {}
+        self.assertIn("subject", inputs)
+        self.assertIn("message", inputs)
+        self.assertIn("recipients", inputs)
 
     def test_execute_send_email_succeeds(self):
         """Executing send_email via the ExecuteSkill action returns success."""
@@ -167,7 +165,7 @@ class TestSkillDiscovery(unittest.TestCase):
             )
 
             goal = ExecuteSkill.Goal()
-            goal.skill_type = "send_email"
+            goal.skill_type = "innate-os/send_email"
             goal.inputs = json.dumps(
                 {
                     "subject": "Integration Test",
@@ -191,7 +189,7 @@ class TestSkillDiscovery(unittest.TestCase):
 
             self.assertTrue(result.success, f"send_email failed: {result.message}")
             self.assertEqual(result.success_type, "success")
-            self.assertEqual(result.skill_type, "send_email")
+            self.assertEqual(result.skill_type, "innate-os/send_email")
             self.assertIn("Email sent to", result.message)
         finally:
             action_client.destroy()
