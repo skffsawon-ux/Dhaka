@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -26,17 +26,12 @@ class TelemetryClient:
         self,
         url: str,
         auth: AuthProvider,
-        robot_id: Optional[str] = None,
         timeout: float = 5.0,
     ) -> None:
         self.base_url: str = url.rstrip("/")
         self._auth: AuthProvider = auth
-        self.robot_id: Optional[str] = robot_id
         self.timeout: float = timeout
-        self.enabled: bool = bool(self.base_url and robot_id)
-
-        if not self.robot_id:
-            logger.warning("robot_id not provided — telemetry logging disabled.")
+        self.enabled: bool = bool(self.base_url)
 
     def _post(self, endpoint: str, data: Dict[str, Any]) -> bool:
         """POST JSON to the telemetry service with auth header.
@@ -47,7 +42,6 @@ class TelemetryClient:
             return False
 
         url = f"{self.base_url}{endpoint}"
-        data["robot_id"] = self.robot_id
         body = json.dumps(data).encode("utf-8")
 
         for attempt in range(2):

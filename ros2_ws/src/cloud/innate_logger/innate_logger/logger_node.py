@@ -67,9 +67,7 @@ class LoggerNode(Node):
 
         # ── Auth + telemetry client ─────────────────────────────────
         auth = AuthProvider(issuer_url=auth_issuer, service_key=service_key)
-        self._client = TelemetryClient(
-            url=telemetry_url, auth=auth, robot_id=None
-        )
+        self._client = TelemetryClient(url=telemetry_url, auth=auth)
 
         # Git commit at startup
         self._git_commit: str = self._get_git_commit()
@@ -78,8 +76,6 @@ class LoggerNode(Node):
         psutil.cpu_percent()
 
         # ── Subscriptions ───────────────────────────────────────────
-        self.create_subscription(String, "/robot/info", self._on_robot_info, 10)
-
         self._latest_battery: Optional[BatteryState] = None
         self._latest_diagnostics: Optional[DiagnosticArray] = None
 
@@ -91,7 +87,7 @@ class LoggerNode(Node):
             String, "/brain/set_directive", self._on_directive, 10
         )
 
-        # Timer for throttled vitals logging
+        # Timer for vitals logging
         self.create_timer(self.LOG_INTERVAL, self._log_vitals)
 
     # ── Helpers ─────────────────────────────────────────────────────
@@ -111,16 +107,6 @@ class LoggerNode(Node):
 
     # ── Callbacks ───────────────────────────────────────────────────
 
-    def _on_robot_info(self, msg: String) -> None:
-        try:
-            data = json.loads(msg.data)
-            robot_id = data.get("robot_id")
-            if robot_id and robot_id != self._client.robot_id:
-                self._client.robot_id = robot_id
-                self._client.enabled = bool(self._client.base_url and robot_id)
-                self.get_logger().info(f"Robot ID set: {robot_id}")
-        except json.JSONDecodeError:
-            pass
 
     def _on_battery(self, msg: BatteryState) -> None:
         self._latest_battery = msg
@@ -168,7 +154,12 @@ class LoggerNode(Node):
                 )
 
         self.get_logger().info(f"cpu: {cpu_usage:.1f}%")
-        self._client.log_vitals(vitals)
+
+        if not self._client.log_vitals(vitals):
+            self.get_logger().warning(
+                f"Telemetry unreachable — is {self._client.base_url} up?",
+                throttle_duration_sec=20.0,
+            )
 
 
 def main(args: list[str] | None = None) -> None:
