@@ -665,6 +665,11 @@ if [ -f "/etc/systemd/system/arducam-audio.service" ]; then
     SERVICES+=("arducam-audio.service")
 fi
 
+# Add speaker-keepalive if the service file exists
+if [ -f "/etc/systemd/system/speaker-keepalive.service" ]; then
+    SERVICES+=("speaker-keepalive.service")
+fi
+
 # Add shutdown-sound if the service file exists (enable only, runs at shutdown)
 if [ -f "/etc/systemd/system/shutdown-sound.service" ]; then
     SERVICES+=("shutdown-sound.service")

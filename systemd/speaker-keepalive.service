@@ -1,0 +1,19 @@
+[Unit]
+Description=Speaker keep-alive silence stream (prevents MAX98357A amp pop)
+Documentation=https://github.com/innate-inc/innate-os
+# Run after sound hardware and ALSA config are ready
+After=sound.target alsa-restore.service
+Wants=sound.target
+
+[Service]
+Type=simple
+# Play silence forever to keep I2S clock active and prevent amp auto-shutdown pop
+ExecStart=/usr/bin/aplay -q -f S16_LE -r 48000 -c 2 /dev/zero
+Restart=always
+RestartSec=3
+# Run as the actual user for ALSA access
+# NOTE: User and paths are updated by post_update.sh during install
+User=jetson1
+
+[Install]
+WantedBy=multi-user.target
