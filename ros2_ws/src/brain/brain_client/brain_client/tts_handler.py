@@ -21,7 +21,7 @@ from brain_client.logging_config import UniversalLogger
 
 class TTSHandler:
     """
-    Handles text-to-speech conversion using Cartesia API and audio playback via paplay.
+    Handles text-to-speech conversion using Cartesia API and audio playback via aplay.
     
     Requires a ProxyClient instance for accessing Cartesia services.
     Voice ID is read from proxy.config["cartesia_voice_id"].
@@ -52,11 +52,6 @@ class TTSHandler:
         self.is_playing: bool = False
         self.play_lock = threading.Lock()
         self.tts_status_pub = tts_status_pub
-        
-        # Speaker keep-alive: feed silence through PulseAudio to prevent
-        # the audio codec/amplifier from suspending and causing cracks/pops
-        self._keepalive_process: Optional[subprocess.Popen] = None
-        self._start_speaker_keepalive()
 
         # Initialize Cartesia client
         self._init_client()
@@ -86,35 +81,6 @@ class TTSHandler:
         except Exception as e:
             self.logger.debug(f"Proxy warmup failed (non-fatal): {e}")
     
-    def _start_speaker_keepalive(self):
-        """Start a background silence stream via PulseAudio to keep the speaker active.
-
-        Prevents the audio codec/amplifier from powering down between utterances,
-        which causes an audible crack/pop when it wakes up. Uses pacat (PulseAudio)
-        rather than aplay (ALSA) so it doesn't exclusively lock the hardware device.
-        """
-        try:
-            self._keepalive_process = subprocess.Popen(
-                ["pacat", "--playback", "/dev/zero",
-                 "--format=s16le", "--rate=48000", "--channels=2"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            self.logger.info("🔊 Speaker keep-alive started (PulseAudio silence stream)")
-        except Exception as e:
-            self.logger.warn(f"⚠️ Failed to start speaker keep-alive: {e}")
-            self._keepalive_process = None
-
-    def _stop_speaker_keepalive(self):
-        """Stop the background silence stream."""
-        if self._keepalive_process is not None:
-            try:
-                self._keepalive_process.kill()
-                self._keepalive_process.wait()
-            except Exception:
-                pass
-            self._keepalive_process = None
-
     def is_available(self) -> bool:
         """Check if TTS is available and configured."""
         return self._cartesia_client is not None
@@ -170,9 +136,9 @@ class TTSHandler:
             }
 
             # Volume is managed system-wide by app.cpp via
-            # pactl set-sink-volume, so paplay just uses the default.
+            # amixer sset Master, so aplay just uses the default.
             player = subprocess.Popen(
-                ["paplay"],
+                ["aplay", "-q"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -229,7 +195,7 @@ class TTSHandler:
 
                 t_stream_done = time.perf_counter()
 
-                # Signal writer to close stdin and wait for paplay to finish
+                # Signal writer to close stdin and wait for aplay to finish
                 q.put(None)
                 writer.join()
                 player.wait()
@@ -247,7 +213,7 @@ class TTSHandler:
                     success = True
                 else:
                     stderr = player.stderr.read().decode(errors="replace").strip() if player.stderr else ""
-                    self.logger.error(f"❌ paplay failed (rc={player.returncode}): {stderr}")
+                    self.logger.error(f"❌ aplay failed (rc={player.returncode}): {stderr}")
                     success = False
             except Exception as e:
                 self.logger.error(f"❌ Streaming TTS failed: {e}")
@@ -339,7 +305,6 @@ class TTSHandler:
 
     def close(self):
         """Clean up resources."""
-        self._stop_speaker_keepalive()
         if self._cartesia_client:
             self.logger.info("🔇 TTS handler closed")
             # Cartesia client doesn't need explicit cleanup in sync mode

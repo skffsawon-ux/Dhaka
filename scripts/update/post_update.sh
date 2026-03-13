@@ -11,7 +11,7 @@
 #   2. Helper scripts in /usr/local/bin
 #   3. Udev rules
 #   4. Bluetooth configuration
-#   4b. Arducam microphone setup (ALSA + PulseAudio)
+#   4b. Arducam microphone setup (ALSA)
 #   5. Apt/pip dependencies (skipped on first-install)
 #   6. Rebuild ROS2 workspace
 #   7. Zsh configuration
@@ -199,7 +199,7 @@ fi
 log "Stopping services to begin update..."
 
 # Stop systemd services first (if they exist)
-for service in jetson-perf.service zenoh-router.service ros-app.service ble-provisioner.service; do
+for service in jetson-perf.service zenoh-router.service ros-app.service ble-provisioner.service speaker-keepalive.service; do
     if systemctl is-active --quiet "$service" 2>/dev/null; then
         log "Stopping $service"
         systemctl stop "$service"
@@ -423,6 +423,16 @@ else
         log "  Apt dependencies installed"
     fi
 
+    # Remove PulseAudio (conflicts with ALSA-only audio setup)
+    if dpkg -l | grep -q "^ii.*pulseaudio "; then
+        log "Removing PulseAudio..."
+        apt-get purge -y pulseaudio pulseaudio-utils 2>/dev/null || true
+        apt-get autoremove -y 2>/dev/null || true
+        log "  PulseAudio removed"
+    else
+        log "  PulseAudio not installed, skipping removal"
+    fi
+
     # Pip dependencies
     log "Checking Python dependencies..."
     PIP_DEPS_FILE="$REPO_DIR/ros2_ws/pip-requirements.txt"
@@ -464,7 +474,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 7. Rebuild ROS2 workspace if needed
+# 6. Rebuild ROS2 workspace if needed
 # -----------------------------------------------------------------------------
 log "Checking ROS2 workspace..."
 if [ -d "$REPO_DIR/ros2_ws/src" ]; then
@@ -653,6 +663,11 @@ fi
 # Add arducam-audio if the service file exists
 if [ -f "/etc/systemd/system/arducam-audio.service" ]; then
     SERVICES+=("arducam-audio.service")
+fi
+
+# Add speaker-keepalive if the service file exists
+if [ -f "/etc/systemd/system/speaker-keepalive.service" ]; then
+    SERVICES+=("speaker-keepalive.service")
 fi
 
 # Add shutdown-sound if the service file exists (enable only, runs at shutdown)
