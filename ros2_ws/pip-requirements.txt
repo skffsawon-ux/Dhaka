@@ -19,6 +19,7 @@ websockets
 # Data/ML
 h5py
 einops
+dotenv
 # torch/torchvision/torchaudio are installed separately in post_update.sh
 # to ensure CUDA wheels from Jetson AI Lab (pip prefers CPU manylinux wheels otherwise)
 

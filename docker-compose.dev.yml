@@ -30,6 +30,8 @@ services:
       - BRAIN_URL=ws://host.docker.internal:8765  # Connect to brain running on host
     ports:
       - "9090:9090"
+      - "8765:8765"
+      - "7447:7447"
 
     volumes:
       # 1) Mount your local code
