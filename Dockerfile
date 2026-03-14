@@ -49,7 +49,9 @@ RUN pip install --upgrade \
     cartesia \
     torch \
     torchvision \
-    einops
+    einops \
+    python-dotenv \
+    websocket-client
 
 # 5. Install oh-my-zsh (for root, since containers typically run as root unless changed)
 #    The official install script tries to prompt, so we run it in a way that doesn't hang.
