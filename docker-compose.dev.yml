@@ -18,7 +18,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        MODE: simulation  # Change to 'simulation' or 'hardware'
+        MODE: simulation # Change to 'simulation' or 'hardware'
     container_name: innate-dev
     # Use host networking if you need direct access to hardware, or use your own approach
     depends_on:
@@ -26,12 +26,10 @@ services:
     environment:
       - DISPLAY=novnc:0.0
       - INNATE_OS_ROOT=/root/innate-os
-      - SKIP_UPDATE_CHECK=1  # Skip git update checks in simulation mode
-      - BRAIN_URL=ws://host.docker.internal:8765  # Connect to brain running on host
+      - SKIP_UPDATE_CHECK=1 # Skip git update checks in simulation mode
+      - BRAIN_URL=ws://host.docker.internal:8765 # Connect to brain running on host
     ports:
       - "9090:9090"
-      - "8765:8765"
-      - "7447:7447"
 
     volumes:
       # 1) Mount your local code
