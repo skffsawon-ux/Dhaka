@@ -37,23 +37,6 @@ innate-update view     # Attach to tmux session
 
 Robots use SSH deploy keys for secure, read-only access to the release repository.
 
-### For Administrators
-
-Generate and install deploy keys for robots using the GitHub CLI:
-
-```bash
-# Generate a deploy key for a robot (run from dev machine)
-cd /path/to/innate-os
-export GITHUB_TOKEN=$(gh auth token)
-ssh-keygen -t ed25519 -f robot_XXX_deploy_key -N ""
-gh repo deploy-key add robot_XXX_deploy_key.pub --repo innate-inc/innate-os-release --title "robot-XXX"
-
-# Copy the private key to the robot
-ssh jetson1@<robot-ip> "mkdir -p ~/.ssh && chmod 700 ~/.ssh"
-scp robot_XXX_deploy_key jetson1@<robot-ip>:~/.ssh/innate_deploy_key
-ssh jetson1@<robot-ip> "chmod 600 ~/.ssh/innate_deploy_key"
-```
-
 ### Managing Deploy Keys
 
 ```bash
@@ -321,10 +304,6 @@ ls -la ~/.ssh/innate_deploy_key
 
 # Test GitHub connection
 ssh -T git@github.com
-
-# Re-install deploy key on robot manually
-scp robot_XXX_deploy_key jetson1@<ip>:~/.ssh/innate_deploy_key
-ssh jetson1@<ip> "chmod 600 ~/.ssh/innate_deploy_key"
 ```
 
 **"No tags found"**
@@ -384,21 +363,3 @@ The workflow (`.github/workflows/release-to-deploy-repo.yml`):
 |------------|---------|--------|
 | `innate-os` | Development repo | Developers only |
 | `innate-os-release` | Customer-facing releases | Deploy keys (read-only) |
-
-### Regenerating Deploy Keys
-
-If you need to regenerate keys (e.g., key compromise):
-
-```bash
-# Remove all existing keys
-gh repo deploy-key list --repo innate-inc/innate-os-release --json id -q '.[].id' | \
-  xargs -I {} gh repo deploy-key delete {} --repo innate-inc/innate-os-release --yes
-
-# Generate new key pair and add to GitHub
-ssh-keygen -t ed25519 -f robot_XXX_deploy_key -N ""
-gh repo deploy-key add robot_XXX_deploy_key.pub --repo innate-inc/innate-os-release --title "robot-XXX"
-
-# Re-deploy private key to robot
-scp robot_XXX_deploy_key jetson1@<ip>:~/.ssh/innate_deploy_key
-ssh jetson1@<ip> "chmod 600 ~/.ssh/innate_deploy_key"
-```
