@@ -39,25 +39,20 @@ Robots use SSH deploy keys for secure, read-only access to the release repositor
 
 ### For Administrators
 
-Generate and install deploy keys for robots:
+Generate and install deploy keys for robots using the GitHub CLI:
 
 ```bash
-# Generate keys for N robots (run from dev machine)
+# Generate a deploy key for a robot (run from dev machine)
 cd /path/to/innate-os
 export GITHUB_TOKEN=$(gh auth token)
-./scripts/ejection/generate-deploy-keys.sh -n 40 -r innate-inc/innate-os-release --release innate-inc/innate-os-release
+ssh-keygen -t ed25519 -f robot_XXX_deploy_key -N ""
+gh repo deploy-key add robot_XXX_deploy_key.pub --repo innate-inc/innate-os-release --title "robot-XXX"
 
-# Install key on a robot
-./scripts/ejection/install-key-on-robot.sh 1 jetson1@192.168.55.1
+# Copy the private key to the robot
+ssh jetson1@<robot-ip> "mkdir -p ~/.ssh && chmod 700 ~/.ssh"
+scp robot_XXX_deploy_key jetson1@<robot-ip>:~/.ssh/innate_deploy_key
+ssh jetson1@<robot-ip> "chmod 600 ~/.ssh/innate_deploy_key"
 ```
-
-The install script will:
-1. Remove old SSH keys (id_ed25519, id_rsa)
-2. Install the deploy key
-3. Configure SSH for GitHub
-4. Switch to main branch and delete other branches
-5. Update git remote to `innate-os-release`
-6. Show final configuration report
 
 ### Managing Deploy Keys
 
@@ -327,8 +322,9 @@ ls -la ~/.ssh/innate_deploy_key
 # Test GitHub connection
 ssh -T git@github.com
 
-# Re-run install script if needed
-./install-key-on-robot.sh robot-XXX jetson1@<ip>
+# Re-install deploy key on robot manually
+scp robot_XXX_deploy_key jetson1@<ip>:~/.ssh/innate_deploy_key
+ssh jetson1@<ip> "chmod 600 ~/.ssh/innate_deploy_key"
 ```
 
 **"No tags found"**
@@ -398,9 +394,11 @@ If you need to regenerate keys (e.g., key compromise):
 gh repo deploy-key list --repo innate-inc/innate-os-release --json id -q '.[].id' | \
   xargs -I {} gh repo deploy-key delete {} --repo innate-inc/innate-os-release --yes
 
-# Regenerate
-./scripts/ejection/generate-deploy-keys.sh -n 40 -r innate-inc/innate-os-release --release innate-inc/innate-os-release
+# Generate new key pair and add to GitHub
+ssh-keygen -t ed25519 -f robot_XXX_deploy_key -N ""
+gh repo deploy-key add robot_XXX_deploy_key.pub --repo innate-inc/innate-os-release --title "robot-XXX"
 
-# Re-deploy to robots
-./scripts/ejection/install-key-on-robot.sh 1 jetson1@<ip>
+# Re-deploy private key to robot
+scp robot_XXX_deploy_key jetson1@<ip>:~/.ssh/innate_deploy_key
+ssh jetson1@<ip> "chmod 600 ~/.ssh/innate_deploy_key"
 ```
