@@ -2,7 +2,6 @@
 
 ## Table of Contents
 - [Quick Start](#quick-start)
-- [Deploy Key Setup](#deploy-key-setup)
 - [Commands](#commands)
 - [Configuration](#configuration)
 - [Update Process](#update-process)
@@ -29,26 +28,6 @@ innate-update start    # Start ROS services
 innate-update stop     # Stop ROS services
 innate-update restart  # Restart ROS services
 innate-update view     # Attach to tmux session
-```
-
----
-
-## Deploy Key Setup
-
-Robots use SSH deploy keys for secure, read-only access to the release repository.
-
-### Managing Deploy Keys
-
-```bash
-# List all deploy keys on the repo
-gh repo deploy-key list --repo innate-inc/innate-os-release
-
-# Remove a specific key
-gh repo deploy-key delete <KEY_ID> --repo innate-inc/innate-os-release
-
-# Remove all keys
-gh repo deploy-key list --repo innate-inc/innate-os-release --json id -q '.[].id' | \
-  xargs -I {} gh repo deploy-key delete {} --repo innate-inc/innate-os-release --yes
 ```
 
 ---
