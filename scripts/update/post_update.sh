@@ -3,8 +3,7 @@
 # This script runs after update/install to configure system components
 # Requires root privileges via sudo
 #
-# Usage: sudo ./post_update.sh [--first-install]
-#   --first-install  Skip dependency installation (used on fresh install, already done by install.sh)
+# Usage: sudo ./post_update.sh
 #
 # This script handles:
 #   1. Systemd service files
@@ -12,7 +11,7 @@
 #   3. Udev rules
 #   4. Bluetooth configuration
 #   4b. Arducam microphone setup (ALSA)
-#   5. Apt/pip dependencies (skipped on first-install)
+#   5. Apt/pip dependencies
 #   6. Rebuild ROS2 workspace
 #   7. Zsh configuration
 #   8. DDS setup
@@ -30,16 +29,6 @@ else
     SCRIPT_PATH="$0"
 fi
 
-# Parse arguments
-FIRST_INSTALL=false
-for arg in "$@"; do
-    case $arg in
-        --first-install)
-            FIRST_INSTALL=true
-            shift
-            ;;
-    esac
-done
 
 # Check for root privileges
 if [ "$(id -u)" -ne 0 ]; then
@@ -101,11 +90,7 @@ ensure_log_ownership() {
 }
 
 log "========================================"
-if [ "$FIRST_INSTALL" = true ]; then
-    log "Starting post-install script (first install mode)"
-else
-    log "Starting post-update script"
-fi
+log "Starting post-update script"
 log "Repository: $REPO_DIR"
 log "User: $ACTUAL_USER"
 log "========================================"
@@ -334,11 +319,8 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 6. Install/update dependencies (skip on first install)
+# 6. Install/update dependencies
 # -----------------------------------------------------------------------------
-if [ "$FIRST_INSTALL" = true ]; then
-    log "Skipping dependencies (already installed during first install)"
-else
     # Apt dependencies
     log "Checking apt dependencies..."
     
@@ -471,7 +453,6 @@ else
         sudo -u "$ACTUAL_USER" pip3 install -r "$PIP_DEPS_FILE" --upgrade-strategy only-if-needed
         log "  Pip dependencies installed"
     fi
-fi
 
 # -----------------------------------------------------------------------------
 # 6. Rebuild ROS2 workspace if needed
