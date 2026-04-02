@@ -2,7 +2,6 @@
 
 ## Table of Contents
 - [Quick Start](#quick-start)
-- [Deploy Key Setup](#deploy-key-setup)
 - [Commands](#commands)
 - [Configuration](#configuration)
 - [Update Process](#update-process)
@@ -29,48 +28,6 @@ innate-update start    # Start ROS services
 innate-update stop     # Stop ROS services
 innate-update restart  # Restart ROS services
 innate-update view     # Attach to tmux session
-```
-
----
-
-## Deploy Key Setup
-
-Robots use SSH deploy keys for secure, read-only access to the release repository.
-
-### For Administrators
-
-Generate and install deploy keys for robots:
-
-```bash
-# Generate keys for N robots (run from dev machine)
-cd /path/to/innate-os
-export GITHUB_TOKEN=$(gh auth token)
-./scripts/ejection/generate-deploy-keys.sh -n 40 -r innate-inc/innate-os-release --release innate-inc/innate-os-release
-
-# Install key on a robot
-./scripts/ejection/install-key-on-robot.sh 1 jetson1@192.168.55.1
-```
-
-The install script will:
-1. Remove old SSH keys (id_ed25519, id_rsa)
-2. Install the deploy key
-3. Configure SSH for GitHub
-4. Switch to main branch and delete other branches
-5. Update git remote to `innate-os-release`
-6. Show final configuration report
-
-### Managing Deploy Keys
-
-```bash
-# List all deploy keys on the repo
-gh repo deploy-key list --repo innate-inc/innate-os-release
-
-# Remove a specific key
-gh repo deploy-key delete <KEY_ID> --repo innate-inc/innate-os-release
-
-# Remove all keys
-gh repo deploy-key list --repo innate-inc/innate-os-release --json id -q '.[].id' | \
-  xargs -I {} gh repo deploy-key delete {} --repo innate-inc/innate-os-release --yes
 ```
 
 ---
@@ -326,9 +283,6 @@ ls -la ~/.ssh/innate_deploy_key
 
 # Test GitHub connection
 ssh -T git@github.com
-
-# Re-run install script if needed
-./install-key-on-robot.sh robot-XXX jetson1@<ip>
 ```
 
 **"No tags found"**
@@ -388,19 +342,3 @@ The workflow (`.github/workflows/release-to-deploy-repo.yml`):
 |------------|---------|--------|
 | `innate-os` | Development repo | Developers only |
 | `innate-os-release` | Customer-facing releases | Deploy keys (read-only) |
-
-### Regenerating Deploy Keys
-
-If you need to regenerate keys (e.g., key compromise):
-
-```bash
-# Remove all existing keys
-gh repo deploy-key list --repo innate-inc/innate-os-release --json id -q '.[].id' | \
-  xargs -I {} gh repo deploy-key delete {} --repo innate-inc/innate-os-release --yes
-
-# Regenerate
-./scripts/ejection/generate-deploy-keys.sh -n 40 -r innate-inc/innate-os-release --release innate-inc/innate-os-release
-
-# Re-deploy to robots
-./scripts/ejection/install-key-on-robot.sh 1 jetson1@<ip>
-```
