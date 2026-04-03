@@ -128,8 +128,11 @@ def nmcli_add_or_modify_connection(ssid, password, priority):
     """
     success_check, exists, err_check = nmcli_connection_exists(ssid)
 
+    if not success_check:
+        return False, f"Failed to check if connection exists: {err_check}"
+
     # If profile exists and no new password, just update priority and reconnect
-    if success_check and exists and not password:
+    if exists and not password:
         nm_logger.info(f"Profile exists for {ssid}, updating priority")
         _run_nmcli([
             'nmcli', 'connection', 'modify', ssid,
@@ -147,7 +150,7 @@ def nmcli_add_or_modify_connection(ssid, password, priority):
 
     # New network or password change — delete stale profile and let nmcli
     # auto-negotiate security (WPA2/WPA3/open)
-    if success_check and exists:
+    if exists:
         nm_logger.info(f"Removing existing profile for {ssid} (password change)")
         success_del, _, stderr_del = _run_nmcli(
             ['nmcli', 'connection', 'delete', ssid], use_sudo=True
