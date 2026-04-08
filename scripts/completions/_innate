@@ -1,4 +1,6 @@
 #compdef innate in8
+# Auto-generated — do not edit.
+# Regenerate: innate completions > scripts/completions/_innate
 
 _innate_packages() {
   local -a pkgs
@@ -9,53 +11,15 @@ _innate_packages() {
   fi
 }
 
-_innate_service() {
-  local -a actions=(
-    'start:Start all ROS nodes'
-    'stop:Stop all ROS nodes'
-    'restart:Restart all ROS nodes'
-    'rebuild:Stop, build, start'
-    'view:Attach to tmux session'
-  )
-  case $words[1] in
-    rebuild)
-      _innate_packages
-      ;;
-    *)
-      _describe 'service action' actions
-      ;;
-  esac
-}
-
-_innate_update() {
-  local -a subcmds=(
-    'check:Check for updates'
-    'apply:Apply updates'
-    'status:Show version info'
-  )
-  case $words[1] in
-    check|apply)
-      _arguments \
-        '--dev[Use dev channel]' \
-        '--yes[Skip confirmation]' \
-        '--background[Run in background]'
-      ;;
-    *)
-      _describe 'update action' subcmds
-      ;;
-  esac
-}
-
 _innate() {
   local -a commands=(
-    'service:Manage ROS nodes (start/stop/restart/rebuild/view)'
-    'view:Attach to ROS tmux session'
-    'restart:Restart all ROS nodes'
-    'rebuild:Stop nodes, build, start nodes'
-    'build:Build ROS2 workspace'
-    'clean:Remove build/install/log artifacts'
-    'diag:Run hardware diagnostics'
-    'update:Check/apply OS updates'
+    'build:Stop nodes, build workspace, restart nodes.'
+    'clean:Remove build/install/log artifacts.'
+    'diag:Run hardware diagnostics.'
+    'restart:Restart all ROS nodes.'
+    'service:Manage ROS nodes (start/stop/restart/view).'
+    'update:Check and apply Innate-OS updates.'
+    'view:Attach to ROS tmux session.'
   )
 
   _arguments -C \
@@ -68,53 +32,49 @@ _innate() {
       ;;
     args)
       case $words[1] in
+        build)
+          _innate_packages
+          ;;
         service)
           _arguments -C \
-            '1:action:->svc_action' \
-            '*::arg:->svc_args'
+            '1:action:->sub' \
+            '*::arg:->sub_args'
           case $state in
-            svc_action)
+            sub)
               local -a actions=(
-                'start:Start all ROS nodes'
-                'stop:Stop all ROS nodes'
-                'restart:Restart all ROS nodes'
-                'rebuild:Stop, build, start'
-                'view:Attach to tmux session'
+                'restart:Restart all ROS nodes.'
+                'start:Start all ROS nodes.'
+                'stop:Stop all ROS nodes.'
+                'view:Attach to tmux session.'
               )
               _describe 'service action' actions
               ;;
-            svc_args)
-              case $words[1] in
-                rebuild)
-                  _innate_packages
-                  ;;
-              esac
-              ;;
           esac
-          ;;
-        build|rebuild)
-          _innate_packages
           ;;
         update)
           _arguments -C \
-            '1:subcmd:->upd_sub' \
-            '*::arg:->upd_args'
+            '1:action:->sub' \
+            '*::arg:->sub_args'
           case $state in
-            upd_sub)
-              local -a subcmds=(
-                'check:Check for updates'
-                'apply:Apply updates'
-                'status:Show version info'
+            sub)
+              local -a actions=(
+                'apply:Apply pending updates.'
+                'check:Check if updates are available.'
+                'status:Show current version and service info.'
               )
-              _describe 'update action' subcmds
+              _describe 'update action' actions
               ;;
-            upd_args)
+            sub_args)
               case $words[1] in
-                check|apply)
+                apply)
                   _arguments \
-                    '--dev[Use dev channel]' \
-                    '--yes[Skip confirmation]' \
-                    '--background[Run in background]'
+                    '--dev[Use latest commit instead of latest tag]' \
+                    '--yes[Skip confirmation prompts]' \
+                    '--background[Run in background tmux session]'
+                  ;;
+                check)
+                  _arguments \
+                    '--dev[Use latest commit instead of latest tag]'
                   ;;
               esac
               ;;

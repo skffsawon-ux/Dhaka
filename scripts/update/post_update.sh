@@ -266,6 +266,14 @@ if [ -d "$REPO_DIR/scripts" ]; then
         ln -s "$REPO_DIR/scripts/innate" /usr/local/bin/innate
     fi
 
+    # Regenerate zsh completions from the Click command tree
+    if [ -f "$REPO_DIR/scripts/innate" ]; then
+        log "  Generating zsh completions"
+        mkdir -p "$REPO_DIR/scripts/completions"
+        sudo -u "$ACTUAL_USER" "$REPO_DIR/scripts/innate" completions > "$REPO_DIR/scripts/completions/_innate"
+        chown "$ACTUAL_USER:$ACTUAL_USER" "$REPO_DIR/scripts/completions/_innate"
+    fi
+
     # Symlink restart script if it exists
     if [ -f "$REPO_DIR/scripts/restart_robot_networking.sh" ]; then
         log "  Symlinking restart_robot_networking.sh"

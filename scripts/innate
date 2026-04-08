@@ -1,39 +1,14 @@
 #!/usr/bin/env python3
-"""
-Innate OS Developer CLI
+"""Innate OS developer CLI.  Run ``innate --help`` for usage."""
 
-Usage:
-    innate                              Status dashboard
-
-    innate service start                Start all ROS nodes
-    innate service stop                 Stop all ROS nodes
-    innate service restart              Restart all ROS nodes
-    innate service rebuild [pkg ...]    Stop, build, start
-    innate service view                 Attach to tmux session
-
-    innate view                         Shortcut: service view
-    innate restart                      Shortcut: service restart
-
-    innate build [pkg ...]              Build ROS2 workspace
-    innate clean                        Remove build artifacts
-    innate diag                         Run hardware diagnostics
-
-    innate update check                 Check for updates (latest tag)
-    innate update check --dev           Check for updates (latest commit)
-    innate update apply                 Apply updates (latest tag)
-    innate update apply --dev           Apply updates (latest commit)
-    innate update apply --yes           Apply without confirmation
-    innate update apply --background    Apply in background tmux session
-    innate update status                Show version & service info
-
-Alias: in8
-"""
-
-import argparse
 import os
 import subprocess
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
+
+import click
 
 
 # ---------------------------------------------------------------------------
@@ -42,11 +17,9 @@ from pathlib import Path
 
 INNATE_OS_ROOT = Path(os.environ.get("INNATE_OS_ROOT", Path.home() / "innate-os"))
 ROS_WS = INNATE_OS_ROOT / "ros2_ws"
-DDS_SETUP = INNATE_OS_ROOT / "dds" / "setup_dds.zsh"
 LAUNCH_HW = INNATE_OS_ROOT / "scripts" / "launch_ros_in_tmux.sh"
 LAUNCH_SIM = INNATE_OS_ROOT / "scripts" / "launch_sim_in_tmux.zsh"
 DIAGNOSTICS = INNATE_OS_ROOT / "scripts" / "diagnostics.py"
-INNATE_UPDATE = INNATE_OS_ROOT / "scripts" / "update" / "innate-update"
 
 TMUX_SESSION_HW = "ros_nodes"
 TMUX_SESSION_SIM = "mars"
@@ -63,8 +36,10 @@ LOGO = r"""  ___ _   _ _   _    _  _____ _____
 # Colors
 # ---------------------------------------------------------------------------
 
+
 class C:
     """ANSI colors, disabled when not a TTY."""
+
     _on = sys.stdout.isatty()
     RED = "\033[0;31m" if _on else ""
     GREEN = "\033[0;32m" if _on else ""
@@ -79,6 +54,7 @@ class C:
 # ---------------------------------------------------------------------------
 # Environment detection
 # ---------------------------------------------------------------------------
+
 
 def is_sim_mode():
     if os.path.exists("/.dockerenv"):
@@ -98,15 +74,13 @@ def tmux_session():
 
 def tmux_session_exists(session=None):
     session = session or tmux_session()
-    r = subprocess.run(["tmux", "has-session", "-t", session],
-                       capture_output=True)
+    r = subprocess.run(["tmux", "has-session", "-t", session], capture_output=True)
     return r.returncode == 0
 
 
 def tmux_window_count(session=None):
     session = session or tmux_session()
-    r = subprocess.run(["tmux", "list-windows", "-t", session],
-                       capture_output=True, text=True)
+    r = subprocess.run(["tmux", "list-windows", "-t", session], capture_output=True, text=True)
     if r.returncode != 0:
         return 0
     return len(r.stdout.strip().splitlines())
@@ -115,6 +89,7 @@ def tmux_window_count(session=None):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def ok(msg):
     print(f"  {C.GREEN}✓{C.NC} {msg}")
@@ -137,7 +112,8 @@ def run(cmd, **kwargs):
 def get_version():
     r = subprocess.run(
         ["git", "-C", str(INNATE_OS_ROOT), "describe", "--tags", "--always", "--dirty"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     return r.stdout.strip() if r.returncode == 0 else "unknown"
 
@@ -153,17 +129,16 @@ def get_mode_label():
 
 
 def zenoh_active():
-    r = subprocess.run(["systemctl", "is-active", "--quiet", "zenoh-router.service"],
-                       capture_output=True)
+    r = subprocess.run(["systemctl", "is-active", "--quiet", "zenoh-router.service"], capture_output=True)
     return r.returncode == 0
 
 
 # ---------------------------------------------------------------------------
-# Commands
+# Service implementation
 # ---------------------------------------------------------------------------
 
-def cmd_status(_args):
-    """Default command: show status dashboard."""
+
+def _show_status():
     print()
     for line in LOGO.splitlines():
         print(f"  {C.CYAN}{line}{C.NC}")
@@ -194,33 +169,12 @@ def cmd_status(_args):
     print()
     print(f"  {C.BOLD}innate view{C.NC}         Attach to nodes")
     print(f"  {C.BOLD}innate restart{C.NC}      Restart nodes")
-    print(f"  {C.BOLD}innate build{C.NC}        Build workspace")
+    print(f"  {C.BOLD}innate build{C.NC}        Build & restart")
     print(f"  {C.BOLD}innate update{C.NC}       Check/apply updates")
     print(f"  {C.BOLD}innate diag{C.NC}         Check hardware")
     print(f"  {C.BOLD}innate --help{C.NC}       All commands")
     print()
     return 0
-
-
-def cmd_service(args):
-    """Manage ROS node services."""
-    action = args.action
-    if action is None:
-        args._parser.print_help()
-        return 1
-    if action == "start":
-        return _service_start()
-    elif action == "stop":
-        return _service_stop()
-    elif action == "restart":
-        return _service_restart()
-    elif action == "rebuild":
-        return _service_rebuild(args)
-    elif action == "view":
-        return _service_view()
-    else:
-        fail(f"Unknown service action: {action}")
-        return 1
 
 
 def _service_start():
@@ -236,11 +190,7 @@ def _service_start():
         fail(f"Launch script not found: {script}")
         return 1
 
-    # Launch in background -- the script ends with `sleep infinity` for systemd,
-    # so we can't wait for it. Stream its output until the tmux session appears,
-    # then drain the remaining banner lines and return.
     import fcntl
-    import time
 
     proc = subprocess.Popen(
         [str(script)],
@@ -250,7 +200,6 @@ def _service_start():
         start_new_session=True,
     )
 
-    # Make stdout non-blocking so we never hang on read
     fd = proc.stdout.fileno()
     flags = fcntl.fcntl(fd, fcntl.F_GETFL)
     fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
@@ -273,12 +222,10 @@ def _service_start():
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         drain_output()
-        # The banner's closing box line marks the script is done launching
         if b"\xe2\x95\x9a" in collected:  # ╚
             break
         time.sleep(0.3)
 
-    # Detach from the pipe -- let the script continue with sleep infinity
     proc.stdout.close()
 
     if tmux_session_exists(session):
@@ -318,23 +265,7 @@ def _service_view():
         return 1
 
 
-def cmd_view(_args):
-    """Shortcut: attach to tmux session."""
-    return _service_view()
-
-
-def cmd_restart(_args):
-    """Shortcut: restart ROS nodes."""
-    return _service_restart()
-
-
-def cmd_rebuild(args):
-    """Shortcut: stop, build, start."""
-    return _service_rebuild(args)
-
-
-def cmd_build(args):
-    """Build the ROS2 workspace."""
+def _build(packages):
     ros_setup = "/opt/ros/humble/setup.bash"
     ws_setup = ROS_WS / "install" / "setup.bash"
 
@@ -352,18 +283,16 @@ def cmd_build(args):
     )
 
     import shutil
-    if shutil.which("ccache"):
-        colcon_cmd += (
-            " -DCMAKE_C_COMPILER_LAUNCHER=ccache"
-            " -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
-        )
 
-    if args.packages:
-        pkg_list = " ".join(args.packages)
+    if shutil.which("ccache"):
+        colcon_cmd += " -DCMAKE_C_COMPILER_LAUNCHER=ccache" " -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+
+    if packages:
+        pkg_list = " ".join(packages)
         colcon_cmd += f" --packages-select {pkg_list}"
 
     full_cmd = f"{source_chain} && cd {ROS_WS} && {colcon_cmd}"
-    print(f"  Building{' ' + ' '.join(args.packages) if args.packages else ' workspace'}...")
+    print(f"  Building{' ' + ' '.join(packages) if packages else ' workspace'}...")
     r = run(["bash", "-c", full_cmd])
     if r.returncode == 0:
         ok("Build complete")
@@ -372,19 +301,7 @@ def cmd_build(args):
     return r.returncode
 
 
-def _service_rebuild(args):
-    _service_stop()
-
-    rc = cmd_build(args)
-    if rc != 0:
-        fail("Skipping restart due to build failure")
-        return rc
-
-    return _service_start()
-
-
-def cmd_clean(_args):
-    """Remove build/install/log artifacts."""
+def _clean():
     import shutil
 
     removed = []
@@ -401,118 +318,1000 @@ def cmd_clean(_args):
     return 0
 
 
-def cmd_diag(_args):
+def _build_cycle(packages):
+    """Stop nodes, build, restart."""
+    _service_stop()
+    rc = _build(packages)
+    if rc != 0:
+        fail("Skipping restart due to build failure")
+        sys.exit(rc)
+    sys.exit(_service_start())
+
+
+# ---------------------------------------------------------------------------
+# Update business logic
+# ---------------------------------------------------------------------------
+
+
+class _UpdateConfig:
+    """Configuration loaded from environment variables."""
+
+    def __init__(self):
+        self.repo_dir = Path(os.environ.get("INNATE_OS_DIR", Path.home() / "innate-os"))
+        self.state_dir = Path(os.environ.get("INNATE_STATE_DIR", "/var/lib/innate-update"))
+        self.log_dir = self.repo_dir / "logs"
+        self.update_cache = self.state_dir / "update-cache"
+        self.update_lock = Path("/tmp/innate-update.lock")
+        self.branch = os.environ.get("INNATE_UPDATE_BRANCH", "main")
+        self.daemon_interval = int(os.environ.get("INNATE_UPDATE_INTERVAL", "3600"))
+
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            pass
+
+
+class _UpdateLogger:
+    """Simple logger with colors and file output."""
+
+    def __init__(self, log_file: Path):
+        self.log_file = log_file
+
+    def _write_to_file(self, message: str):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with open(self.log_file, "a") as f:
+                f.write(f"[{timestamp}] {message}\n")
+        except (PermissionError, OSError):
+            pass
+
+    def info(self, message: str):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        print(f"{C.BLUE}[{timestamp}]{C.NC} {message}")
+        self._write_to_file(message)
+
+    def success(self, message: str):
+        print(f"{C.GREEN}✓{C.NC} {message}")
+
+    def warning(self, message: str):
+        print(f"{C.YELLOW}⚠{C.NC} {message}")
+
+    def error(self, message: str):
+        print(f"{C.RED}[ERROR]{C.NC} {message}", file=sys.stderr)
+        self._write_to_file(f"ERROR: {message}")
+
+
+class _UpdateServiceManager:
+    """Manage ROS services (tmux-based).  Used internally by _UpdateManager."""
+
+    TMUX_SESSION = "ros_nodes"
+    DISCOVERY_SESSION = "discovery"
+
+    def __init__(self, config: _UpdateConfig, logger: _UpdateLogger):
+        self.config = config
+        self.logger = logger
+        self.launch_script = config.repo_dir / "scripts" / "launch_ros_in_tmux.sh"
+
+    def _run(self, cmd: list, check: bool = True) -> subprocess.CompletedProcess:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if check and result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+        return result
+
+    def _tmux_session_exists(self, session: str) -> bool:
+        result = self._run(["tmux", "has-session", "-t", session], check=False)
+        return result.returncode == 0
+
+    def _systemd_service_active(self, service: str) -> bool:
+        result = self._run(["systemctl", "is-active", "--quiet", service], check=False)
+        return result.returncode == 0
+
+    def is_running(self) -> bool:
+        return self._tmux_session_exists(self.TMUX_SESSION)
+
+    def is_discovery_running(self) -> bool:
+        if self._systemd_service_active("zenoh-router.service"):
+            return True
+        return self._tmux_session_exists(self.DISCOVERY_SESSION)
+
+    def is_update_running(self) -> bool:
+        """Check if an update is in progress (via lock file / live PID)."""
+        if not self.config.update_lock.exists():
+            return False
+        try:
+            content = self.config.update_lock.read_text().strip().split("\n")
+            if content:
+                pid = int(content[0])
+                os.kill(pid, 0)
+                return True
+        except (ValueError, IndexError):
+            return True
+        except ProcessLookupError:
+            self.config.update_lock.unlink(missing_ok=True)
+            return False
+        except PermissionError:
+            return True
+        return False
+
+    def start(self) -> int:
+        if self.is_running():
+            self.logger.warning(f"ROS services already running (tmux session '{self.TMUX_SESSION}')")
+            print("Use 'innate view' to attach to the session")
+            print("Use 'innate restart' to restart services")
+            return 0
+
+        if not self.launch_script.exists():
+            self.logger.error(f"Launch script not found: {self.launch_script}")
+            return 1
+
+        self.logger.info("Starting ROS services...")
+        try:
+            subprocess.Popen(
+                ["nohup", "bash", str(self.launch_script)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                cwd=str(self.config.repo_dir),
+            )
+            time.sleep(2)
+
+            if self.is_running():
+                self.logger.success("ROS services started")
+                print(f"  Session: {self.TMUX_SESSION}")
+                print("  Use 'innate view' to attach")
+                return 0
+            else:
+                self.logger.error("Failed to start ROS services")
+                return 1
+        except Exception as e:
+            self.logger.error(f"Failed to start services: {e}")
+            return 1
+
+    def status(self) -> dict:
+        return {
+            "ros_running": self.is_running(),
+            "discovery_running": self.is_discovery_running(),
+            "discovery_systemd": self._systemd_service_active("zenoh-router.service"),
+            "update_running": self.is_update_running(),
+        }
+
+
+class _GitRepo:
+    """Git repository operations."""
+
+    def __init__(self, config: _UpdateConfig):
+        self.config = config
+        self.repo_dir = config.repo_dir
+        self.branch = config.branch
+
+    def _run(self, args, check=True) -> subprocess.CompletedProcess:
+        result = subprocess.run(
+            ["git", "-C", str(self.repo_dir)] + args,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if check and result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, args, result.stdout, result.stderr)
+        return result
+
+    def check_is_repo(self) -> bool:
+        return (self.repo_dir / ".git").is_dir()
+
+    def fetch(self, tags=True) -> bool:
+        args = ["fetch", "origin", self.branch]
+        if tags:
+            args.extend(["--tags", "--force"])
+        result = self._run(args, check=False)
+        return result.returncode == 0
+
+    def fetch_tags_only(self) -> bool:
+        result = self._run(["fetch", "origin", "--tags", "--force", "--prune"], check=False)
+        return result.returncode == 0
+
+    def prune_stale_local_tags(self) -> list[str]:
+        """Delete local tags that no longer exist on the remote.
+
+        Handles the case where a bad tag was pushed then deleted — without
+        pruning, users would be stuck on the stale local copy forever.
+        """
+        local_result = self._run(["tag", "-l"], check=False)
+        if local_result.returncode != 0 or not local_result.stdout.strip():
+            return []
+        local_tags = set(local_result.stdout.strip().split("\n"))
+
+        remote_result = self._run(["ls-remote", "--tags", "origin"], check=False)
+        if remote_result.returncode != 0:
+            return []
+
+        remote_tags = set()
+        for line in remote_result.stdout.strip().split("\n"):
+            if line and "refs/tags/" in line:
+                tag_ref = line.split("refs/tags/")[-1]
+                tag_name = tag_ref.replace("^{}", "")
+                remote_tags.add(tag_name)
+
+        stale_tags = local_tags - remote_tags
+        deleted = []
+        for tag in stale_tags:
+            result = self._run(["tag", "-d", tag], check=False)
+            if result.returncode == 0:
+                deleted.append(tag)
+        return deleted
+
+    def current_commit(self) -> str:
+        result = self._run(["rev-parse", "HEAD"], check=False)
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
+
+    def current_branch(self) -> str:
+        result = self._run(["rev-parse", "--abbrev-ref", "HEAD"], check=False)
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
+
+    def remote_url(self) -> str:
+        result = self._run(["config", "--get", "remote.origin.url"], check=False)
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
+
+    def get_latest_tag(self) -> str:
+        result = self._run(
+            ["tag", "--sort=-v:refname", "--merged", f"origin/{self.branch}"],
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().split("\n")[0]
+        result = self._run(["tag", "--sort=-v:refname"], check=False)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().split("\n")[0]
+        return ""
+
+    def get_current_tag(self) -> str:
+        result = self._run(["describe", "--tags", "--exact-match", "HEAD"], check=False)
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    def resolve_ref(self, ref: str) -> str:
+        result = self._run(["rev-parse", ref], check=False)
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
+
+    def is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        result = self._run(["merge-base", "--is-ancestor", ancestor, descendant], check=False)
+        return result.returncode == 0
+
+    def commits_between(self, ref1: str, ref2: str) -> int:
+        result = self._run(["rev-list", f"{ref1}..{ref2}", "--count"], check=False)
+        try:
+            return int(result.stdout.strip()) if result.returncode == 0 else 0
+        except ValueError:
+            return 0
+
+    def log_oneline(self, ref1: str, ref2: str, limit: int = None) -> list[str]:
+        args = ["--no-pager", "log", "--oneline", f"{ref1}..{ref2}"]
+        result = self._run(args, check=False)
+        if result.returncode != 0:
+            return []
+        lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
+        if limit and len(lines) > limit:
+            return lines[:limit]
+        return lines
+
+    def has_local_changes(self) -> bool:
+        result = self._run(["diff-index", "--quiet", "HEAD", "--"], check=False)
+        return result.returncode != 0
+
+    def stash(self, message: str) -> bool:
+        result = self._run(["stash", "push", "-m", message], check=False)
+        return result.returncode == 0
+
+    def checkout(self, ref: str) -> bool:
+        result = self._run(["checkout", ref], check=False)
+        return result.returncode == 0
+
+    def checkout_branch(self, branch: str, start_point: str) -> bool:
+        """Checkout a local branch, resetting it to a start point."""
+        result = self._run(["checkout", "-B", branch, start_point], check=False)
+        return result.returncode == 0
+
+
+class _UpdateManager:
+    """Core update logic: check, apply, status, daemon."""
+
+    def __init__(self, config: _UpdateConfig, logger: _UpdateLogger, dev_mode: bool = False, yes: bool = False):
+        self.config = config
+        self.logger = logger
+        self.dev_mode = dev_mode
+        self.yes = yes
+        self.git = _GitRepo(config)
+        self.services = _UpdateServiceManager(config, logger)
+
+    # -- helpers --------------------------------------------------------------
+
+    def _check_repo(self):
+        if not self.git.check_is_repo():
+            self.logger.error(f"Not a git repository: {self.config.repo_dir}")
+            sys.exit(1)
+
+    def _write_cache(self, value: str):
+        try:
+            self.config.update_cache.parent.mkdir(parents=True, exist_ok=True)
+            self.config.update_cache.write_text(value)
+        except PermissionError:
+            pass
+
+    def _read_cache(self) -> str:
+        try:
+            if self.config.update_cache.exists():
+                return self.config.update_cache.read_text().strip()
+        except PermissionError:
+            pass
+        return ""
+
+    def _clear_cache(self):
+        try:
+            self.config.update_cache.unlink(missing_ok=True)
+        except PermissionError:
+            pass
+
+    def _show_commits(self, ref1: str, ref2: str, count: int, max_show: int = 10):
+        commits = self.git.log_oneline(ref1, ref2, limit=max_show)
+        if count > max_show:
+            print(f"Showing first {max_show} of {count} commits:")
+        for commit in commits:
+            print(f"  {commit}")
+        if count > max_show:
+            print(f"  ... and {count - max_show} more commits")
+
+    def _create_update_lock(self):
+        try:
+            self.config.update_lock.parent.mkdir(parents=True, exist_ok=True)
+            self.config.update_lock.write_text(f"{os.getpid()}\n{datetime.now().isoformat()}\n")
+        except Exception:
+            pass
+
+    def _remove_update_lock(self):
+        try:
+            self.config.update_lock.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    # -- check ----------------------------------------------------------------
+
+    def check(self) -> int:
+        """Check for updates.  Returns 0 if up-to-date, 1 if updates available."""
+        self._check_repo()
+        self.logger.info("Checking for updates...")
+
+        if not self.git.fetch():
+            self.logger.error("Failed to fetch from remote. Check network and git authentication.")
+            return 1
+
+        deleted_tags = self.git.prune_stale_local_tags()
+        if deleted_tags:
+            self.logger.info(f"Pruned stale local tags: {', '.join(deleted_tags)}")
+
+        current = self.git.current_commit()
+        if self.dev_mode:
+            return self._check_dev_mode(current)
+        return self._check_tag_mode(current)
+
+    def _check_dev_mode(self, current: str) -> int:
+        target = self.git.resolve_ref(f"origin/{self.config.branch}")
+        commits_behind = self.git.commits_between("HEAD", f"origin/{self.config.branch}")
+        self._write_cache(str(commits_behind))
+
+        if commits_behind == 0:
+            self.logger.success("System is up to date (dev mode)")
+            print(f"Current: {current[:7]}")
+            return 0
+
+        self.logger.warning(f"Updates available (dev mode): {commits_behind} new commit(s)")
+        print(f"Current: {current[:7]}")
+        print(f"Latest:  {target[:7]}")
+        print()
+        print("Recent changes:")
+        self._show_commits("HEAD", f"origin/{self.config.branch}", commits_behind)
+        print()
+        print("Run 'innate update apply --dev' to install updates")
+        return 1
+
+    def _check_tag_mode(self, current: str) -> int:
+        latest_tag = self.git.get_latest_tag()
+        current_tag = self.git.get_current_tag()
+
+        if not latest_tag:
+            self.logger.warning(f"No tags found on {self.config.branch} branch")
+            print("Use 'innate update check --dev' to check for latest commits instead")
+            return 0
+
+        latest_tag_commit = self.git.resolve_ref(latest_tag)
+
+        if current == latest_tag_commit:
+            self._write_cache("0")
+            self.logger.success("System is up to date")
+            print(f"Current: {current_tag} ({current[:7]})")
+            return 0
+
+        if self.git.is_ancestor(latest_tag_commit, current):
+            self._write_cache("0")
+            self.logger.success("System is ahead of latest stable release")
+            print(f"Current: {current[:7]} (dev)")
+            print(f"Latest tag: {latest_tag} ({latest_tag_commit[:7]})")
+            print()
+            print("You are on a development commit ahead of the latest release.")
+            print("Use 'innate update check --dev' to check for newer dev commits.")
+            return 0
+
+        self._write_cache("1")
+        commits_behind = self.git.commits_between("HEAD", latest_tag)
+        self.logger.warning(f"Update available: {latest_tag}")
+        print(f"Current: {current_tag or current[:7]}")
+        print(f"Latest:  {latest_tag} ({latest_tag_commit[:7]})")
+        print()
+        if commits_behind > 0:
+            print(f"Changes in {latest_tag}:")
+            self._show_commits("HEAD", latest_tag, commits_behind)
+        print()
+        print("Run 'innate update apply' to install updates")
+        return 1
+
+    # -- apply ----------------------------------------------------------------
+
+    def apply(self) -> int:
+        """Apply available updates."""
+        self._check_repo()
+        self._create_update_lock()
+
+        print()
+        print("╔════════════════════════════════════════════════════════╗")
+        print("║          INNATE-OS UPDATE PROCESS                      ║")
+        print("╚════════════════════════════════════════════════════════╝")
+        print()
+
+        self.git.fetch()
+        current = self.git.current_commit()
+
+        if self.dev_mode:
+            return self._apply_dev_mode(current)
+        return self._apply_tag_mode(current)
+
+    def _apply_dev_mode(self, current: str) -> int:
+        remote_ref = f"origin/{self.config.branch}"
+        target_display = f"latest commit on {self.config.branch}"
+        commits_behind = self.git.commits_between("HEAD", remote_ref)
+
+        if commits_behind == 0:
+            self.logger.success("Already up to date (dev mode)")
+            self._remove_update_lock()
+            return 0
+
+        self.logger.info(f"Found {commits_behind} commit(s) to apply (dev mode)")
+        print()
+        print("Changes to be applied:")
+        self._show_commits("HEAD", remote_ref, commits_behind, max_show=20)
+
+        return self._do_git_update(
+            self.config.branch,
+            target_display,
+            current,
+            track_remote=remote_ref,
+        )
+
+    def _apply_tag_mode(self, current: str) -> int:
+        latest_tag = self.git.get_latest_tag()
+
+        if not latest_tag:
+            self.logger.error("No tags found. Use --dev to update to latest commit.")
+            self._remove_update_lock()
+            return 1
+
+        latest_tag_commit = self.git.resolve_ref(latest_tag)
+
+        if current == latest_tag_commit:
+            self.logger.success(f"Already up to date at {latest_tag}")
+            self._remove_update_lock()
+            return 0
+
+        if self.git.is_ancestor(latest_tag_commit, current):
+            self.logger.warning(f"You are on a dev commit ahead of {latest_tag}")
+            print("Use 'innate update apply --dev' to update to the latest dev commit.")
+            self._remove_update_lock()
+            return 0
+
+        commits_behind = self.git.commits_between("HEAD", latest_tag)
+        self.logger.info(f"Updating to {latest_tag} ({commits_behind} commits)")
+        print()
+        print(f"Changes to be applied for {latest_tag}:")
+        self._show_commits("HEAD", latest_tag, commits_behind, max_show=20)
+
+        return self._do_git_update(latest_tag, latest_tag, current)
+
+    def _do_git_update(self, target_ref, target_display, old_commit, skip_confirm=False, track_remote=None):
+        if not skip_confirm and not self.yes:
+            print()
+            try:
+                response = input(f"Continue with update to {target_display}? [y/N] ")
+            except EOFError:
+                response = "n"
+            if response.lower() != "y":
+                self.logger.warning("Update cancelled")
+                return 0
+
+        self.logger.info("Checking for local changes...")
+        if self.git.has_local_changes():
+            self.logger.warning("Stashing local changes")
+            self.git.stash(f"Auto-stash before update {int(time.time())}")
+
+        self.logger.info(f"Updating to {target_display}...")
+        if track_remote is not None:
+            success = self.git.checkout_branch(target_ref, track_remote)
+        else:
+            success = self.git.checkout(target_ref)
+
+        if success:
+            new_commit = self.git.current_commit()
+            self.logger.success(f"Code updated: {old_commit[:7]} → {new_commit[:7]}")
+        else:
+            self.logger.error("Git checkout failed. Fix conflicts and try again.")
+            self._remove_update_lock()
+            return 1
+
+        return self._run_post_update()
+
+    def _run_post_update(self) -> int:
+        post_update_script = self.config.repo_dir / "scripts" / "update" / "post_update.sh"
+
+        if post_update_script.exists():
+            self.logger.info("Running post-update script...")
+            result = subprocess.run(["sudo", str(post_update_script)], check=False)
+            if result.returncode == 0:
+                self.logger.success("Post-update script completed")
+            else:
+                self.logger.error(
+                    f"Post-update script failed. Check logs: {self.config.log_dir}/post_update.log"
+                )
+                self._remove_update_lock()
+                return 1
+        else:
+            self.logger.warning("No post-update script found, skipping")
+
+        self.logger.info("Starting ROS services...")
+        self.services.start()
+
+        print()
+        print("╔════════════════════════════════════════════════════════╗")
+        print("║          UPDATE COMPLETED SUCCESSFULLY                 ║")
+        print("╚════════════════════════════════════════════════════════╝")
+        print()
+
+        self._clear_cache()
+        self._remove_update_lock()
+        return 0
+
+    # -- status ---------------------------------------------------------------
+
+    def status(self) -> int:
+        self._check_repo()
+
+        current = self.git.current_commit()
+        branch = self.git.current_branch()
+        remote = self.git.remote_url()
+        current_tag = self.git.get_current_tag()
+
+        print("Innate-OS Status:")
+        print(f"  Directory: {self.config.repo_dir}")
+        print(f"  Branch:    {branch}")
+        print(f"  Commit:    {current[:7]}")
+        if current_tag:
+            print(f"  Tag:       {current_tag}")
+        print(f"  Remote:    {remote}")
+        print()
+
+        svc_status = self.services.status()
+        print("Services:")
+        if svc_status["ros_running"]:
+            print(f"  {C.GREEN}●{C.NC} ROS nodes: running (tmux session 'ros_nodes')")
+        else:
+            print(f"  {C.RED}○{C.NC} ROS nodes: stopped")
+
+        if svc_status["discovery_running"]:
+            if svc_status["discovery_systemd"]:
+                print(f"  {C.GREEN}●{C.NC} Zenoh: running (systemd)")
+            else:
+                print(f"  {C.GREEN}●{C.NC} Zenoh: running (tmux session 'discovery')")
+        else:
+            print(f"  {C.RED}○{C.NC} Zenoh: stopped")
+
+        if svc_status["update_running"]:
+            print(f"  {C.YELLOW}●{C.NC} Update: in progress (lock: {self.config.update_lock})")
+        print()
+
+        cached = self._read_cache()
+        if cached:
+            try:
+                updates = int(cached)
+                if updates > 0:
+                    self.logger.warning(f"Updates available: {updates} commit(s)")
+                    print("  Run 'innate update apply' to install")
+                else:
+                    self.logger.success("System up to date")
+            except ValueError:
+                pass
+        else:
+            print("  Run 'innate update check' to check for updates")
+
+        return 0
+
+    # -- quick-check / daemon -------------------------------------------------
+
+    def quick_check(self) -> int:
+        """Silent check for .zshrc / ssh-welcome integration."""
+        if os.environ.get("SKIP_UPDATE_CHECK"):
+            return 0
+
+        self._check_repo()
+
+        if self.config.update_cache.exists():
+            try:
+                cache_mtime = self.config.update_cache.stat().st_mtime
+                cache_age = time.time() - cache_mtime
+                if cache_age < 3600:
+                    cached = self._read_cache()
+                    try:
+                        return 1 if int(cached) > 0 else 0
+                    except ValueError:
+                        pass
+            except OSError:
+                pass
+
+        self.git.fetch()
+
+        current = self.git.current_commit()
+        latest_tag = self.git.get_latest_tag()
+
+        if not latest_tag:
+            return 2
+
+        latest_tag_commit = self.git.resolve_ref(latest_tag)
+
+        if current == latest_tag_commit:
+            self._write_cache("0")
+            return 0
+
+        if self.git.is_ancestor(latest_tag_commit, current):
+            self._write_cache("0")
+            return 0
+
+        self._write_cache("1")
+        return 1
+
+    def daemon(self) -> int:
+        self.logger.info(f"Starting innate-update daemon (interval: {self.config.daemon_interval}s)")
+
+        self.logger.info("Daemon: fetching latest tags...")
+        if self.git.fetch_tags_only():
+            self.logger.info("Daemon: tags fetched successfully")
+        else:
+            self.logger.warning("Daemon: failed to fetch tags")
+
+        while True:
+            self.logger.info("Daemon: checking for updates...")
+            try:
+                if self.quick_check() != 0:
+                    self.logger.info("Daemon: updates available")
+                else:
+                    self.logger.info("Daemon: system up to date")
+            except Exception as e:
+                self.logger.error(f"Daemon: check failed: {e}")
+            time.sleep(self.config.daemon_interval)
+
+
+def _make_update_manager(dev=False, yes=False):
+    config = _UpdateConfig()
+    logger = _UpdateLogger(config.log_dir / "update.log")
+    return _UpdateManager(config, logger, dev_mode=dev, yes=yes)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+@click.group(invoke_without_command=True)
+@click.pass_context
+def cli(ctx):
+    """Innate OS developer CLI.
+
+    \b
+    Shortcuts:
+      innate view       → innate service view
+      innate restart    → innate service restart
+
+    Alias: in8
+    """
+    if ctx.invoked_subcommand is None:
+        sys.exit(_show_status())
+
+
+# -- service group ------------------------------------------------------------
+
+
+@cli.group(invoke_without_command=True)
+@click.pass_context
+def service(ctx):
+    """Manage ROS nodes (start/stop/restart/view)."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+        ctx.exit(1)
+
+
+@service.command("start")
+def service_start():
+    """Start all ROS nodes."""
+    sys.exit(_service_start())
+
+
+@service.command("stop")
+def service_stop():
+    """Stop all ROS nodes."""
+    sys.exit(_service_stop())
+
+
+@service.command("restart")
+def service_restart():
+    """Restart all ROS nodes."""
+    sys.exit(_service_restart())
+
+
+@service.command("view")
+def service_view_cmd():
+    """Attach to tmux session."""
+    sys.exit(_service_view())
+
+
+# -- shortcuts ----------------------------------------------------------------
+
+
+@cli.command()
+def view():
+    """Attach to ROS tmux session."""
+    sys.exit(_service_view())
+
+
+@cli.command()
+def restart():
+    """Restart all ROS nodes."""
+    sys.exit(_service_restart())
+
+
+# -- build / clean / diag ----------------------------------------------------
+
+
+@cli.command()
+@click.argument("packages", nargs=-1)
+def build(packages):
+    """Stop nodes, build workspace, restart nodes."""
+    _build_cycle(packages)
+
+
+@cli.command()
+def clean():
+    """Remove build/install/log artifacts."""
+    sys.exit(_clean())
+
+
+@cli.command()
+def diag():
     """Run hardware diagnostics."""
     if not DIAGNOSTICS.exists():
         fail(f"Diagnostics script not found: {DIAGNOSTICS}")
-        return 1
+        sys.exit(1)
     try:
         os.execvp("python3", ["python3", str(DIAGNOSTICS)])
     except OSError as e:
         fail(f"Failed to launch diagnostics: {e}")
-        return 1
+        sys.exit(1)
 
 
-def cmd_update(args):
-    """Delegate to innate-update."""
-    if not INNATE_UPDATE.exists():
-        fail(f"innate-update not found: {INNATE_UPDATE}")
-        return 1
+# -- update -------------------------------------------------------------------
 
-    argv = [str(INNATE_UPDATE), args.subcmd] + args.extra
-    try:
-        os.execvp(str(INNATE_UPDATE), argv)
-    except OSError as e:
-        fail(f"Failed to launch innate-update: {e}")
-        return 1
+
+@cli.group("update", invoke_without_command=True)
+@click.pass_context
+def update(ctx):
+    """Check and apply Innate-OS updates."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+@update.command()
+@click.option("--dev", "-d", is_flag=True, help="Use latest commit instead of latest tag")
+def check(dev):
+    """Check if updates are available."""
+    sys.exit(_make_update_manager(dev=dev).check())
+
+
+@update.command()
+@click.option("--dev", "-d", is_flag=True, help="Use latest commit instead of latest tag")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompts")
+@click.option("--background", "-b", is_flag=True, help="Run in background tmux session")
+@click.option("--in-tmux", is_flag=True, hidden=True)
+def apply(dev, yes, background, in_tmux):
+    """Apply pending updates."""
+    if background and not in_tmux:
+        cmd = ["tmux", "new-session", "-d", "-s", "innate_update", "innate", "update", "apply", "--in-tmux"]
+        if dev:
+            cmd.append("--dev")
+        if yes:
+            cmd.append("--yes")
+        result = subprocess.run(cmd)
+        if result.returncode == 0:
+            print("Update started in background (tmux session 'innate_update')")
+            print("  View progress: tmux attach -t innate_update")
+            sys.exit(0)
+        else:
+            print("Failed to start background update session", file=sys.stderr)
+            sys.exit(1)
+
+    sys.exit(_make_update_manager(dev=dev, yes=yes).apply())
+
+
+@update.command()
+def status():
+    """Show current version and service info."""
+    sys.exit(_make_update_manager().status())
+
+
+@update.command(hidden=True)
+def daemon():
+    """Run as background daemon (for systemd)."""
+    sys.exit(_make_update_manager().daemon())
+
+
+@update.command("quick-check", hidden=True)
+def quick_check():
+    """Silent check for shell/app integration."""
+    sys.exit(_make_update_manager().quick_check())
+
+
+# -- completions (auto-generated) ---------------------------------------------
+
+
+def _zsh_completions():
+    """Walk the Click command tree and emit a static zsh completion script."""
+
+    def fmt_commands(group):
+        entries = []
+        for name in sorted(group.list_commands(None)):
+            cmd = group.get_command(None, name)
+            if cmd and not cmd.hidden:
+                desc = cmd.get_short_help_str(limit=60).replace("'", "'\\''")
+                entries.append(f"'{name}:{desc}'")
+        return entries
+
+    def fmt_options(cmd):
+        entries = []
+        for param in cmd.params:
+            if isinstance(param, click.Option) and not param.hidden:
+                for decl in param.opts:
+                    if decl.startswith("--"):
+                        desc = (param.help or "").replace("'", "'\\''")
+                        entries.append(f"'{decl}[{desc}]'")
+        return entries
+
+    def has_packages_arg(cmd):
+        return any(isinstance(p, click.Argument) and p.name == "packages" for p in cmd.params)
+
+    o = []
+    w = o.append
+
+    w("#compdef innate in8")
+    w("# Auto-generated — do not edit.")
+    w("# Regenerate: innate completions > scripts/completions/_innate")
+    w("")
+    w("_innate_packages() {")
+    w("  local -a pkgs")
+    w('  local src_dir="${INNATE_OS_ROOT:-$HOME/innate-os}/ros2_ws/src"')
+    w('  if [[ -d "$src_dir" ]]; then')
+    w("    pkgs=( ${(f)\"$(find \"$src_dir\" -name package.xml -exec dirname {} \\; 2>/dev/null | xargs -I{} basename {})\"} )")
+    w("    _describe 'ROS2 package' pkgs")
+    w("  fi")
+    w("}")
+    w("")
+    w("_innate() {")
+    w("  local -a commands=(")
+    for e in fmt_commands(cli):
+        w(f"    {e}")
+    w("  )")
+    w("")
+    w("  _arguments -C \\")
+    w("    '1:command:->cmd' \\")
+    w("    '*::arg:->args'")
+    w("")
+    w("  case $state in")
+    w("    cmd)")
+    w("      _describe 'innate command' commands")
+    w("      ;;")
+    w("    args)")
+    w("      case $words[1] in")
+
+    for name in sorted(cli.list_commands(None)):
+        cmd = cli.get_command(None, name)
+        if not cmd or cmd.hidden:
+            continue
+
+        if isinstance(cmd, click.Group):
+            w(f"        {name})")
+            w("          _arguments -C \\")
+            w("            '1:action:->sub' \\")
+            w("            '*::arg:->sub_args'")
+            w("          case $state in")
+            w("            sub)")
+            w("              local -a actions=(")
+            for e in fmt_commands(cmd):
+                w(f"                {e}")
+            w("              )")
+            w(f"              _describe '{name} action' actions")
+            w("              ;;")
+
+            subs_with_opts = {}
+            for sub_name in sorted(cmd.list_commands(None)):
+                sub_cmd = cmd.get_command(None, sub_name)
+                if sub_cmd and not sub_cmd.hidden:
+                    opts = fmt_options(sub_cmd)
+                    if opts:
+                        subs_with_opts[sub_name] = opts
+
+            if subs_with_opts:
+                w("            sub_args)")
+                w("              case $words[1] in")
+                for sub_name, opts in sorted(subs_with_opts.items()):
+                    w(f"                {sub_name})")
+                    w("                  _arguments \\")
+                    for i, opt_s in enumerate(opts):
+                        trail = " \\" if i < len(opts) - 1 else ""
+                        w(f"                    {opt_s}{trail}")
+                    w("                  ;;")
+                w("              esac")
+                w("              ;;")
+
+            w("          esac")
+            w("          ;;")
+        elif has_packages_arg(cmd):
+            w(f"        {name})")
+            w("          _innate_packages")
+            w("          ;;")
+        else:
+            opts = fmt_options(cmd)
+            if opts:
+                w(f"        {name})")
+                w("          _arguments \\")
+                for i, opt_s in enumerate(opts):
+                    trail = " \\" if i < len(opts) - 1 else ""
+                    w(f"            {opt_s}{trail}")
+                w("          ;;")
+
+    w("      esac")
+    w("      ;;")
+    w("  esac")
+    w("}")
+    w("")
+    w('_innate "$@"')
+
+    return "\n".join(o) + "\n"
+
+
+@cli.command("completions", hidden=True)
+def completions():
+    """Generate static zsh completions to stdout."""
+    click.echo(_zsh_completions(), nl=False)
 
 
 # ---------------------------------------------------------------------------
-# Argument parser
+# Entry point
 # ---------------------------------------------------------------------------
-
-def build_parser():
-    parser = argparse.ArgumentParser(
-        prog="innate",
-        description="Innate OS developer CLI",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "shortcuts:\n"
-            "  innate view       = innate service view\n"
-            "  innate restart    = innate service restart\n"
-            "  innate rebuild    = innate service rebuild\n"
-            "\n"
-            "alias: in8\n"
-        ),
-    )
-    sub = parser.add_subparsers(dest="command")
-
-    # -- service --
-    svc = sub.add_parser("service", help="Manage ROS nodes (start/stop/restart/rebuild/view)")
-    svc_sub = svc.add_subparsers(dest="action")
-    svc_sub.add_parser("start", help="Start all ROS nodes")
-    svc_sub.add_parser("stop", help="Stop all ROS nodes")
-    svc_sub.add_parser("restart", help="Restart all ROS nodes")
-    svc_rebuild = svc_sub.add_parser("rebuild", help="Stop, build, start")
-    svc_rebuild.add_argument("packages", nargs="*", help="Specific package(s) to build")
-    svc_sub.add_parser("view", help="Attach to tmux session")
-    svc.set_defaults(_parser=svc)
-
-    # -- view (shortcut) --
-    sub.add_parser("view", help="Attach to ROS tmux session")
-
-    # -- restart (shortcut) --
-    sub.add_parser("restart", help="Restart all ROS nodes")
-
-    # -- rebuild (shortcut) --
-    rbd = sub.add_parser("rebuild", help="Stop nodes, build, start nodes")
-    rbd.add_argument("packages", nargs="*", help="Specific package(s) to build")
-
-    # -- build --
-    bld = sub.add_parser("build", help="Build ROS2 workspace")
-    bld.add_argument("packages", nargs="*", help="Specific package(s) to build")
-
-    # -- clean --
-    sub.add_parser("clean", help="Remove build/install/log artifacts")
-
-    # -- diag --
-    sub.add_parser("diag", help="Run hardware diagnostics")
-
-    # -- update --
-    upd = sub.add_parser("update", help="Check/apply OS updates")
-    upd.add_argument("subcmd", choices=["check", "apply", "status"],
-                     help="Update action")
-    upd.add_argument("extra", nargs="*", help="Extra args (e.g. --dev)")
-
-    return parser
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-DISPATCH = {
-    None: cmd_status,
-    "service": cmd_service,
-    "view": cmd_view,
-    "restart": cmd_restart,
-    "rebuild": cmd_rebuild,
-    "build": cmd_build,
-    "clean": cmd_clean,
-    "diag": cmd_diag,
-    "update": cmd_update,
-}
 
 
 def main():
-    parser = build_parser()
-    args = parser.parse_args()
-    handler = DISPATCH.get(args.command)
-    if handler is None:
-        parser.print_help()
-        return 1
-    return handler(args)
+    cli()
 
 
 if __name__ == "__main__":
-    sys.exit(main() or 0)
+    main()
