@@ -1,0 +1,462 @@
+#!/usr/bin/env python3
+"""
+Innate OS Developer CLI
+
+Usage:
+    innate                              Status dashboard
+
+    innate service start                Start all ROS nodes
+    innate service stop                 Stop all ROS nodes
+    innate service restart              Restart all ROS nodes
+    innate service rebuild [pkg ...]    Stop, build, start
+    innate service view                 Attach to tmux session
+
+    innate view                         Shortcut: service view
+    innate restart                      Shortcut: service restart
+
+    innate build [pkg ...]              Build ROS2 workspace
+    innate clean                        Remove build artifacts
+    innate diag                         Run hardware diagnostics
+
+    innate update check [--dev]         Check for updates
+    innate update apply [--dev]         Apply updates
+    innate update status                Show version info
+
+Alias: in8
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+INNATE_OS_ROOT = Path(os.environ.get("INNATE_OS_ROOT", Path.home() / "innate-os"))
+ROS_WS = INNATE_OS_ROOT / "ros2_ws"
+DDS_SETUP = INNATE_OS_ROOT / "dds" / "setup_dds.zsh"
+LAUNCH_HW = INNATE_OS_ROOT / "scripts" / "launch_ros_in_tmux.sh"
+LAUNCH_SIM = INNATE_OS_ROOT / "scripts" / "launch_sim_in_tmux.zsh"
+DIAGNOSTICS = INNATE_OS_ROOT / "scripts" / "diagnostics.py"
+INNATE_UPDATE = INNATE_OS_ROOT / "scripts" / "update" / "innate-update"
+
+TMUX_SESSION_HW = "ros_nodes"
+TMUX_SESSION_SIM = "mars"
+
+LOGO = r"""  ___ _   _ _   _    _  _____ _____
+ |_ _| \ | | \ | |  / \|_   _| ____|
+  | ||  \| |  \| | / _ \ | | |  _|
+  | || |\  | |\  |/ ___ \| | | |___
+ |___|_| \_|_| \_/_/   \_\_| |_____|
+                 O S"""
+
+
+# ---------------------------------------------------------------------------
+# Colors
+# ---------------------------------------------------------------------------
+
+class C:
+    """ANSI colors, disabled when not a TTY."""
+    _on = sys.stdout.isatty()
+    RED = "\033[0;31m" if _on else ""
+    GREEN = "\033[0;32m" if _on else ""
+    YELLOW = "\033[1;33m" if _on else ""
+    BLUE = "\033[0;34m" if _on else ""
+    CYAN = "\033[0;36m" if _on else ""
+    BOLD = "\033[1m" if _on else ""
+    DIM = "\033[2m" if _on else ""
+    NC = "\033[0m" if _on else ""
+
+
+# ---------------------------------------------------------------------------
+# Environment detection
+# ---------------------------------------------------------------------------
+
+def is_sim_mode():
+    if os.path.exists("/.dockerenv"):
+        return True
+    try:
+        model = Path("/proc/device-tree/model").read_text()
+        if "jetson" in model.lower():
+            return False
+    except (FileNotFoundError, PermissionError):
+        pass
+    return not LAUNCH_HW.exists()
+
+
+def tmux_session():
+    return TMUX_SESSION_SIM if is_sim_mode() else TMUX_SESSION_HW
+
+
+def tmux_session_exists(session=None):
+    session = session or tmux_session()
+    r = subprocess.run(["tmux", "has-session", "-t", session],
+                       capture_output=True)
+    return r.returncode == 0
+
+
+def tmux_window_count(session=None):
+    session = session or tmux_session()
+    r = subprocess.run(["tmux", "list-windows", "-t", session],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return 0
+    return len(r.stdout.strip().splitlines())
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def ok(msg):
+    print(f"  {C.GREEN}✓{C.NC} {msg}")
+
+
+def fail(msg):
+    print(f"  {C.RED}✗{C.NC} {msg}", file=sys.stderr)
+
+
+def warn(msg):
+    print(f"  {C.YELLOW}!{C.NC} {msg}")
+
+
+def run(cmd, **kwargs):
+    """Run a command, inheriting stdio by default."""
+    kwargs.setdefault("check", False)
+    return subprocess.run(cmd, **kwargs)
+
+
+def get_version():
+    r = subprocess.run(
+        ["git", "-C", str(INNATE_OS_ROOT), "describe", "--tags", "--always", "--dirty"],
+        capture_output=True, text=True,
+    )
+    return r.stdout.strip() if r.returncode == 0 else "unknown"
+
+
+def get_mode_label():
+    if is_sim_mode():
+        return "simulation (Docker)"
+    try:
+        model = Path("/proc/device-tree/model").read_text().strip().rstrip("\x00")
+        return f"hardware ({model})"
+    except (FileNotFoundError, PermissionError):
+        return "hardware"
+
+
+def zenoh_active():
+    r = subprocess.run(["systemctl", "is-active", "--quiet", "zenoh-router.service"],
+                       capture_output=True)
+    return r.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+def cmd_status(_args):
+    """Default command: show status dashboard."""
+    print()
+    for line in LOGO.splitlines():
+        print(f"  {C.CYAN}{line}{C.NC}")
+    print()
+
+    version = get_version()
+    mode = get_mode_label()
+    session = tmux_session()
+    running = tmux_session_exists(session)
+
+    if running:
+        wins = tmux_window_count(session)
+        ros_status = f"{C.GREEN}running{C.NC} ({wins} windows)"
+    else:
+        ros_status = f"{C.DIM}stopped{C.NC}"
+
+    if is_sim_mode():
+        dds_status = f"{C.DIM}n/a (sim){C.NC}"
+    elif zenoh_active():
+        dds_status = f"{C.GREEN}zenoh active{C.NC}"
+    else:
+        dds_status = f"{C.DIM}zenoh inactive{C.NC}"
+
+    print(f"  {C.BOLD}Version:{C.NC}  {version}")
+    print(f"  {C.BOLD}Mode:{C.NC}     {mode}")
+    print(f"  {C.BOLD}ROS:{C.NC}      {ros_status}")
+    print(f"  {C.BOLD}DDS:{C.NC}      {dds_status}")
+    print()
+    print(f"  {C.BOLD}innate view{C.NC}         Attach to nodes")
+    print(f"  {C.BOLD}innate restart{C.NC}      Restart nodes")
+    print(f"  {C.BOLD}innate build{C.NC}        Build workspace")
+    print(f"  {C.BOLD}innate diag{C.NC}         Check hardware")
+    print(f"  {C.BOLD}innate --help{C.NC}       All commands")
+    print()
+    return 0
+
+
+def cmd_service(args):
+    """Manage ROS node services."""
+    action = args.action
+    if action is None:
+        args._parser.print_help()
+        return 1
+    if action == "start":
+        return _service_start()
+    elif action == "stop":
+        return _service_stop()
+    elif action == "restart":
+        return _service_restart()
+    elif action == "rebuild":
+        return _service_rebuild(args)
+    elif action == "view":
+        return _service_view()
+    else:
+        fail(f"Unknown service action: {action}")
+        return 1
+
+
+def _service_start():
+    session = tmux_session()
+    if tmux_session_exists(session):
+        warn(f"Already running (tmux session '{session}')")
+        print(f"  Use {C.BOLD}innate view{C.NC} to attach")
+        print(f"  Use {C.BOLD}innate restart{C.NC} to restart")
+        return 0
+
+    script = LAUNCH_SIM if is_sim_mode() else LAUNCH_HW
+    if not script.exists():
+        fail(f"Launch script not found: {script}")
+        return 1
+
+    print(f"  Starting ROS nodes ({C.BOLD}{'sim' if is_sim_mode() else 'hardware'}{C.NC})...")
+    r = run([str(script)], cwd=str(INNATE_OS_ROOT))
+    if r.returncode != 0:
+        fail("Launch script failed")
+        return 1
+
+    if tmux_session_exists(session):
+        ok(f"ROS nodes started (tmux: {session})")
+    else:
+        warn("Launch script exited but tmux session not found")
+    return 0
+
+
+def _service_stop():
+    session = tmux_session()
+    if not tmux_session_exists(session):
+        warn("ROS nodes are not running")
+        return 0
+
+    run(["tmux", "kill-session", "-t", session])
+    ok("ROS nodes stopped")
+    return 0
+
+
+def _service_restart():
+    _service_stop()
+    return _service_start()
+
+
+def _service_view():
+    session = tmux_session()
+    if not tmux_session_exists(session):
+        fail(f"No active session ('{session}')")
+        print(f"  Use {C.BOLD}innate service start{C.NC} first")
+        return 1
+
+    os.execvp("tmux", ["tmux", "attach", "-t", session])
+
+
+def cmd_view(_args):
+    """Shortcut: attach to tmux session."""
+    return _service_view()
+
+
+def cmd_restart(_args):
+    """Shortcut: restart ROS nodes."""
+    return _service_restart()
+
+
+def cmd_rebuild(args):
+    """Shortcut: stop, build, start."""
+    return _service_rebuild(args)
+
+
+def cmd_build(args):
+    """Build the ROS2 workspace."""
+    ros_setup = "/opt/ros/humble/setup.bash"
+    ws_setup = ROS_WS / "install" / "setup.bash"
+
+    source_chain = f"source {ros_setup}"
+    if ws_setup.exists():
+        source_chain += f" && source {ws_setup}"
+
+    colcon_cmd = (
+        "colcon build"
+        " --symlink-install"
+        " --parallel-workers 2"
+        " --cmake-args"
+        " -DBUILD_TESTING=OFF"
+        " -DCMAKE_BUILD_TYPE=Release"
+    )
+
+    import shutil
+    if shutil.which("ccache"):
+        colcon_cmd += (
+            " -DCMAKE_C_COMPILER_LAUNCHER=ccache"
+            " -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+        )
+
+    if args.packages:
+        pkg_list = " ".join(args.packages)
+        colcon_cmd += f" --packages-select {pkg_list}"
+
+    full_cmd = f"{source_chain} && cd {ROS_WS} && {colcon_cmd}"
+    print(f"  Building{' ' + ' '.join(args.packages) if args.packages else ' workspace'}...")
+    r = run(["bash", "-c", full_cmd])
+    if r.returncode == 0:
+        ok("Build complete")
+    else:
+        fail("Build failed")
+    return r.returncode
+
+
+def _service_rebuild(args):
+    _service_stop()
+
+    rc = cmd_build(args)
+    if rc != 0:
+        fail("Skipping restart due to build failure")
+        return rc
+
+    return _service_start()
+
+
+def cmd_clean(_args):
+    """Remove build/install/log artifacts."""
+    import shutil
+
+    removed = []
+    for d in ("build", "install", "log"):
+        p = ROS_WS / d
+        if p.exists():
+            shutil.rmtree(p)
+            removed.append(d)
+
+    if removed:
+        ok(f"Removed: {', '.join(removed)}")
+    else:
+        warn("Nothing to clean")
+    return 0
+
+
+def cmd_diag(_args):
+    """Run hardware diagnostics."""
+    if not DIAGNOSTICS.exists():
+        fail(f"Diagnostics script not found: {DIAGNOSTICS}")
+        return 1
+    os.execvp("python3", ["python3", str(DIAGNOSTICS)])
+
+
+def cmd_update(args):
+    """Delegate to innate-update."""
+    if not INNATE_UPDATE.exists():
+        fail(f"innate-update not found: {INNATE_UPDATE}")
+        return 1
+
+    argv = [str(INNATE_UPDATE), args.subcmd] + args.extra
+    os.execvp(str(INNATE_UPDATE), argv)
+
+
+# ---------------------------------------------------------------------------
+# Argument parser
+# ---------------------------------------------------------------------------
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="innate",
+        description="Innate OS developer CLI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "shortcuts:\n"
+            "  innate view       = innate service view\n"
+            "  innate restart    = innate service restart\n"
+            "  innate rebuild    = innate service rebuild\n"
+            "\n"
+            "alias: in8\n"
+        ),
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    # -- service --
+    svc = sub.add_parser("service", help="Manage ROS nodes (start/stop/restart/rebuild/view)")
+    svc_sub = svc.add_subparsers(dest="action")
+    svc_sub.add_parser("start", help="Start all ROS nodes")
+    svc_sub.add_parser("stop", help="Stop all ROS nodes")
+    svc_sub.add_parser("restart", help="Restart all ROS nodes")
+    svc_rebuild = svc_sub.add_parser("rebuild", help="Stop, build, start")
+    svc_rebuild.add_argument("packages", nargs="*", help="Specific package(s) to build")
+    svc_sub.add_parser("view", help="Attach to tmux session")
+    svc.set_defaults(_parser=svc)
+
+    # -- view (shortcut) --
+    sub.add_parser("view", help="Attach to ROS tmux session")
+
+    # -- restart (shortcut) --
+    sub.add_parser("restart", help="Restart all ROS nodes")
+
+    # -- rebuild (shortcut) --
+    rbd = sub.add_parser("rebuild", help="Stop nodes, build, start nodes")
+    rbd.add_argument("packages", nargs="*", help="Specific package(s) to build")
+
+    # -- build --
+    bld = sub.add_parser("build", help="Build ROS2 workspace")
+    bld.add_argument("packages", nargs="*", help="Specific package(s) to build")
+
+    # -- clean --
+    sub.add_parser("clean", help="Remove build/install/log artifacts")
+
+    # -- diag --
+    sub.add_parser("diag", help="Run hardware diagnostics")
+
+    # -- update --
+    upd = sub.add_parser("update", help="Check/apply OS updates")
+    upd.add_argument("subcmd", choices=["check", "apply", "status"],
+                     help="Update action")
+    upd.add_argument("extra", nargs="*", help="Extra args (e.g. --dev)")
+
+    return parser
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+DISPATCH = {
+    None: cmd_status,
+    "service": cmd_service,
+    "view": cmd_view,
+    "restart": cmd_restart,
+    "rebuild": cmd_rebuild,
+    "build": cmd_build,
+    "clean": cmd_clean,
+    "diag": cmd_diag,
+    "update": cmd_update,
+}
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    handler = DISPATCH.get(args.command)
+    if handler is None:
+        parser.print_help()
+        return 1
+    return handler(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

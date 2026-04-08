@@ -90,22 +90,20 @@ done
 
 tmux select-window -t $SESSION_NAME:"${WINDOW_NAMES[1]}"
 
+SESSION_FMT=$(printf "%-29s" "$SESSION_NAME")
+WINDOWS_FMT=$(printf "%-29s" "${#WINDOW_NAMES[@]}")
+ATTACH_FMT=$(printf "%-29s" "tmux attach -t $SESSION_NAME")
+
 echo ""
-echo "  ╔═══════════════════════════════════════════════════════╗"
-echo "  ║                                                       ║"
-echo "  ║   ██ ███    ██ ███    ██  █████  ████████ ████████    ║"
-echo "  ║   ██ ████   ██ ████   ██ ██   ██    ██    ██          ║"
-echo "  ║   ██ ██ ██  ██ ██ ██  ██ ███████    ██    █████       ║"
-echo "  ║   ██ ██  ██ ██ ██  ██ ██ ██   ██    ██    ██          ║"
-echo "  ║   ██ ██   ████ ██   ████ ██   ██    ██    ████████    ║"
-echo "  ║                                                       ║"
-echo "  ║            ✓  All systems launched                    ║"
-echo "  ║                                                       ║"
-printf "  ║   Session:  %-42s║\n" "$SESSION_NAME"
-printf "  ║   Windows:  %-42s║\n" "${#WINDOW_NAMES[@]}"
-printf "  ║   Attach:   %-42s║\n" "tmux attach -t $SESSION_NAME"
-echo "  ║                                                       ║"
-echo "  ╚═══════════════════════════════════════════════════════╝"
+echo "  ╔═════════════════════════════════════════╗     ____"
+echo "  ║  All systems launched ✅                ║    [O  O]"
+echo "  ║                                         ║     _||_"
+echo "  ║  Session:  ${SESSION_FMT}║   |      |"
+echo "  ║  Windows:  ${WINDOWS_FMT}║   |______|"
+echo "  ║  Attach:   ${ATTACH_FMT}║     o  o"
+echo "  ║                                         ║"
+echo "  ║  Run 'innate view' to monitor nodes 👀  ║"
+echo "  ╚═════════════════════════════════════════╝"
 echo ""
 
 # Play startup sound after processes initialize (backgrounded, detached from terminal)
