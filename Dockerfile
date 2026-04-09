@@ -116,3 +116,4 @@ export INNATE_OS_ROOT=/root/innate-os\n\
 #    You'll drop into an interactive oh-my-zsh environment with everything set up.
 WORKDIR /root/innate-os
 CMD ["zsh", "-l"]
+
