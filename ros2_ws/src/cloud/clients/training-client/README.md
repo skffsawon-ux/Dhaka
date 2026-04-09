@@ -60,13 +60,14 @@ python -m training_client.cli --issuer "" submit ./skill
 In Python:
 
 ```python
-from training_client.main import create_manager
+from training_client.src.types import ClientConfig
+from training_client.src.skill_manager import SkillManager
 
-manager = create_manager(
+manager = SkillManager(ClientConfig(
     server_url="http://localhost:8000",
     auth_token="dev_innate_service_key_abcde",
     auth_issuer_url="",  # plain bearer, no OIDC
-)
+))
 ```
 
 ## CLI Usage (`cli.py`)
@@ -117,9 +118,7 @@ python -m training_client.cli runs SKILL_ID \
 
 ```
 training_client/
-├── main.py               # Minimal — instantiates SkillManager, nothing else
 ├── cli.py                # Click CLI (innate-train)
-├── training_node.py      # ROS 2 Humble lifecycle node (optional rclpy dep)
 ├── pyproject.toml
 └── src/
     ├── __init__.py
@@ -131,7 +130,7 @@ training_client/
     └── skill_manager.py   # Core lifecycle: create skill → upload → create run → poll → download
 ```
 
-All business logic lives in `src/`. The top-level `cli.py` and `training_node.py` are thin consumers that iterate the generators from `skill_manager.py` and present progress to the user.
+All business logic lives in `src/`. The top-level `cli.py` is a thin consumer that iterates the generators from `skill_manager.py` and presents progress to the user.
 
 ## Core Concepts
 
@@ -147,10 +146,7 @@ create_skill ──► upload_files ──► create_run ──► poll_status �
 
 ### Progress Updates (Generator Pattern)
 
-`skill_manager.py` exposes generator functions that `yield` `ProgressUpdate` objects at each step. This lets both the CLI and ROS node consume the same core logic:
-
-- **CLI** (`cli.py`): iterates the generator, prints updates to stdout.
-- **ROS node** (`training_node.py`): iterates the generator, publishes updates on a topic.
+`skill_manager.py` exposes generator functions that `yield` `ProgressUpdate` objects at each step. This lets CLI consumers iterate the same core logic and print updates to stdout.
 
 ### Atomic Zstd Compression
 
@@ -467,9 +463,6 @@ python -m training_client.cli run /home/jetson1/skills/pick-cable \
 
 ### CLI
 - `click` — CLI framework
-
-### ROS 2 Node
-- `rclpy` — ROS 2 Python client (system install, not pip)
 
 ## Configuration
 
