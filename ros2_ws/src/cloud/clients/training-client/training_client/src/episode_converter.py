@@ -137,6 +137,7 @@ def convert_episodes_to_h264(
                 raise
 
     _update_metadata(data_dir, meta, episodes)
+    _cleanup_backups(data_dir)
 
     yield ProgressUpdate(
         stage=ProgressStage.COMPRESSING,
@@ -307,3 +308,18 @@ def _update_metadata(
 
     meta_path.write_text(json.dumps(meta, indent=4) + "\n")
     logger.info("Updated %s: dataset_type -> h264", DATASET_METADATA)
+
+
+def _cleanup_backups(data_dir: Path) -> None:
+    """Remove .bak files after successful conversion."""
+    removed = 0
+    freed = 0
+    for bak in sorted(data_dir.glob("*.bak")):
+        freed += bak.stat().st_size
+        bak.unlink()
+        removed += 1
+    if removed:
+        logger.info(
+            "Cleaned up %d backup file(s), freed %.1f GB",
+            removed, freed / 1e9,
+        )
