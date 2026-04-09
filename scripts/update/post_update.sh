@@ -252,6 +252,21 @@ if [ -d "$REPO_DIR/scripts" ]; then
         ln -s "$REPO_DIR/scripts/update/innate-update" /usr/local/bin/innate-update
     fi
 
+    # Symlink innate dev CLI
+    if [ -f "$REPO_DIR/scripts/innate" ]; then
+        log "  Symlinking innate"
+        rm -f /usr/local/bin/innate
+        ln -s "$REPO_DIR/scripts/innate" /usr/local/bin/innate
+    fi
+
+    # Regenerate zsh completions from the Click command tree
+    if [ -f "$REPO_DIR/scripts/innate" ]; then
+        log "  Generating zsh completions"
+        mkdir -p "$REPO_DIR/scripts/completions"
+        sudo -u "$ACTUAL_USER" "$REPO_DIR/scripts/innate" completions > "$REPO_DIR/scripts/completions/_innate"
+        chown "$ACTUAL_USER:$ACTUAL_USER" "$REPO_DIR/scripts/completions/_innate"
+    fi
+
     # Symlink restart script if it exists
     if [ -f "$REPO_DIR/scripts/restart_robot_networking.sh" ]; then
         log "  Symlinking restart_robot_networking.sh"
@@ -545,10 +560,10 @@ if [ "$(getent passwd $ACTUAL_USER | cut -d: -f7)" != "/bin/zsh" ] && [ -x /bin/
     chsh -s /bin/zsh "$ACTUAL_USER" || true
 fi
 
-# Add user to dialout group for serial port access
-if ! groups "$ACTUAL_USER" | grep -q "\bdialout\b"; then
-    log "  Adding $ACTUAL_USER to dialout group for serial port access"
-    usermod -aG dialout "$ACTUAL_USER" || true
+# Add user to dialout and i2c groups for serial port and I2C access
+if ! groups "$ACTUAL_USER" | grep -q "\bdialout\b" || ! groups "$ACTUAL_USER" | grep -q "\bi2c\b"; then
+    log "  Adding $ACTUAL_USER to dialout and i2c groups for serial port and I2C access"
+    usermod -aG dialout,i2c "$ACTUAL_USER" || true
     log "  Note: User may need to log out and back in for group changes to take effect"
 fi
 
@@ -594,6 +609,11 @@ $ACTUAL_USER ALL=(ALL) NOPASSWD: $REPO_DIR/scripts/update/post_update.sh
 # NetworkManager CLI (called by BLE provisioner for WiFi configuration)
 $ACTUAL_USER ALL=(ALL) NOPASSWD: /usr/bin/nmcli
 $ACTUAL_USER ALL=(ALL) NOPASSWD: /bin/nmcli
+
+# systemctl for ROS node management (called by innate CLI)
+$ACTUAL_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl start ros-app.service
+$ACTUAL_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop ros-app.service
+$ACTUAL_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart ros-app.service
 EOF
 chmod 440 "$SUDOERS_FILE"
 log "  Sudoers configured for $ACTUAL_USER"
