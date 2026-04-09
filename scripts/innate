@@ -183,7 +183,6 @@ def _show_status():
     print()
     print(f"  {C.BOLD}innate view{C.NC}         Attach to nodes")
     print(f"  {C.BOLD}innate restart{C.NC}      Restart nodes")
-    print(f"  {C.BOLD}innate logs{C.NC}         View node logs")
     print(f"  {C.BOLD}innate build{C.NC}        Build & restart")
     print(f"  {C.BOLD}innate update{C.NC}       Check/apply updates")
     print(f"  {C.BOLD}innate diag{C.NC}         Check hardware")
@@ -273,41 +272,15 @@ def _service_restart():
 
 def _service_view():
     session = tmux_session()
-    if tmux_session_exists(session):
-        try:
-            os.execvp("tmux", ["tmux", "attach", "-t", session])
-        except OSError as e:
-            fail(f"Failed to attach to tmux: {e}")
-            return 1
-
-    if not is_sim_mode() and systemd_active(SYSTEMD_SERVICE_HW):
-        warn("Service is running but tmux session not found")
-        print(f"  Showing systemd journal instead...")
-        try:
-            os.execvp("journalctl", ["journalctl", "-u", SYSTEMD_SERVICE_HW, "-f", "--no-pager"])
-        except OSError as e:
-            fail(f"Failed to run journalctl: {e}")
-            return 1
-
-    fail(f"No active session ('{session}')")
-    print(f"  Use {C.BOLD}innate service start{C.NC} first")
-    return 1
-
-
-def _service_logs(follow, lines):
-    if is_sim_mode():
-        fail("Logs command not available in sim mode (no systemd)")
-        print(f"  Use {C.BOLD}innate view{C.NC} to see tmux output")
+    if not tmux_session_exists(session):
+        fail(f"No active session ('{session}')")
+        print(f"  Use {C.BOLD}innate service start{C.NC} first")
         return 1
 
-    cmd = ["journalctl", "-u", SYSTEMD_SERVICE_HW, f"-n{lines}", "--no-pager"]
-    if follow:
-        cmd.append("-f")
-
     try:
-        os.execvp("journalctl", cmd)
+        os.execvp("tmux", ["tmux", "attach", "-t", session])
     except OSError as e:
-        fail(f"Failed to run journalctl: {e}")
+        fail(f"Failed to attach to tmux: {e}")
         return 1
 
 
@@ -1096,7 +1069,6 @@ def cli(ctx):
     Shortcuts:
       innate view       → innate service view
       innate restart    → innate service restart
-      innate logs       → innate service logs
 
     Alias: in8
     """
@@ -1110,7 +1082,7 @@ def cli(ctx):
 @cli.group(invoke_without_command=True)
 @click.pass_context
 def service(ctx):
-    """Manage ROS nodes via systemd (start/stop/restart/view/logs)."""
+    """Manage ROS nodes via systemd (start/stop/restart/view)."""
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
         ctx.exit(1)
@@ -1140,14 +1112,6 @@ def service_view_cmd():
     sys.exit(_service_view())
 
 
-@service.command("logs")
-@click.option("--follow", "-f", is_flag=True, help="Follow log output")
-@click.option("--lines", "-n", default=50, help="Number of lines to show")
-def service_logs_cmd(follow, lines):
-    """View ROS node logs from journald."""
-    sys.exit(_service_logs(follow, lines))
-
-
 # -- shortcuts ----------------------------------------------------------------
 
 
@@ -1161,14 +1125,6 @@ def view():
 def restart():
     """Restart all ROS nodes."""
     sys.exit(_service_restart())
-
-
-@cli.command()
-@click.option("--follow", "-f", is_flag=True, help="Follow log output")
-@click.option("--lines", "-n", default=50, help="Number of lines to show")
-def logs(follow, lines):
-    """View ROS node logs from journald."""
-    sys.exit(_service_logs(follow, lines))
 
 
 # -- build / clean / diag ----------------------------------------------------
