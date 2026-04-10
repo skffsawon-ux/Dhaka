@@ -223,7 +223,7 @@ def _encode_camera_to_mp4(
         )
 
         proc = subprocess.Popen(
-            ["nice", "-n", "19", "gst-launch-1.0", "-e", *gst_pipeline.split()],
+            ["nice", "-n", "0", "gst-launch-1.0", "-e", *gst_pipeline.split()],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
