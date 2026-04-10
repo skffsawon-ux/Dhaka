@@ -188,7 +188,11 @@ def _build_work_list(
                 })
 
         if all_mp4s_exist and cam_items:
-            logger.debug("All MP4s exist for %s — skipping", h5_file)
+            if h5_path.exists():
+                logger.debug("All MP4s exist for %s — skipping", h5_file)
+                continue
+            logger.info("All MP4s exist for %s but stripped H5 missing — queuing strip", h5_file)
+            items.append({"kind": "strip", "filename": h5_file})
             continue
 
         items.extend(cam_items)
