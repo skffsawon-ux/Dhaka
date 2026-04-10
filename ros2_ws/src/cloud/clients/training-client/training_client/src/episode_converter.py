@@ -216,7 +216,7 @@ def _encode_camera_to_mp4(
             f"rawvideoparse width={width} height={height} "
             f"format=bgr framerate={fps}/1 ! "
             f"videoconvert ! "
-            f"x264enc pass=qual quantizer=23 speed-preset=ultrafast ! "
+            f"x264enc pass=qual quantizer=23 speed-preset=ultrafast threads=4 ! "
             f"h264parse ! "
             f"mp4mux ! "
             f"filesink location={mp4_path}"
