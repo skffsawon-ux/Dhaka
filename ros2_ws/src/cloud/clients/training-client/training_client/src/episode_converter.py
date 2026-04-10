@@ -7,9 +7,10 @@ For each episode_N.h5 in the data directory:
   3. Write a new episode_N.h5 without /observations/images/
   4. Update dataset_metadata.json (dataset_type h5 -> h264)
 
-The conversion is idempotent: if dataset_type is already "h264", no work
-is done.  Partially-completed conversions are detected by the presence of
-files in raw_data/ and resumed.
+The conversion is incremental: episodes whose MP4s already exist on disk
+are skipped.  New episodes added after a prior conversion are detected and
+converted.  Partially-completed conversions are detected by the presence
+of files in raw_data/ and resumed.
 """
 
 from __future__ import annotations
@@ -48,10 +49,6 @@ def convert_episodes_to_h264(
 
     meta = json.loads(meta_path.read_text())
 
-    if meta.get("dataset_type") == "h264":
-        logger.debug("dataset_type already h264 — skipping conversion")
-        return
-
     fps = int(meta.get("data_frequency", 30))
     episodes = meta.get("episodes", [])
 
@@ -63,6 +60,7 @@ def convert_episodes_to_h264(
 
     work_items = _build_work_list(data_dir, raw_dir, episodes)
     if not work_items:
+        logger.debug("No episodes need H.264 conversion")
         return
 
     total = len(work_items)
@@ -175,15 +173,25 @@ def _build_work_list(
             images_grp = obs.get("images")
             if images_grp is None:
                 continue
+
+            all_mp4s_exist = True
+            cam_items: list[dict] = []
             for cam_name in sorted(images_grp.keys()):
                 mp4_name = f"{stem}_{cam_name}.mp4"
-                items.append({
+                if not (data_dir / mp4_name).exists():
+                    all_mp4s_exist = False
+                cam_items.append({
                     "kind": "mp4",
                     "filename": mp4_name,
                     "h5_file": h5_file,
                     "camera": cam_name,
                 })
 
+        if all_mp4s_exist and cam_items:
+            logger.debug("All MP4s exist for %s — skipping", h5_file)
+            continue
+
+        items.extend(cam_items)
         items.append({
             "kind": "strip",
             "filename": h5_file,
