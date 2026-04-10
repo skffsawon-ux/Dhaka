@@ -29,7 +29,7 @@ activate     (write to metadata)
 
 ```bash
 ros2 service call /innate_training/submit_skill innate_cloud_msgs/srv/SubmitSkill \
-  "{skill_dir: '/home/jetson1/skills/pick-cable', name: 'pick-cable'}"
+  "{skill_dir: '/home/jetson1/skills/pick-cable'}"
 ```
 
 This creates the skill on the server (or reuses an existing one), converts
