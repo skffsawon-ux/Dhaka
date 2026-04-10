@@ -396,6 +396,10 @@ class BrainClientNode(Node):
         self.active_inputs_pub = self.create_publisher(
             String, "/input_manager/active_inputs", 10
         )
+        # Ensure all inputs (STT, etc.) are off on startup; they'll be activated
+        # when the brain activates via activate_directive_inputs().
+        self.active_inputs_pub.publish(String(data=json.dumps({"inputs": []})))
+
         self.chat_out_pub = self.create_publisher(String, "/brain/chat_out", 10)
         self.task_status_pub = self.create_publisher(
             String, "/brain/skill_status_update", 10
@@ -520,6 +524,11 @@ class BrainClientNode(Node):
             )
             time.sleep(1.0)
 
+        # Initialise early — _on_available_skills reads this during the spin wait below
+        self.primitive_running = None
+        self._pending_reregistration = False
+        self._goal_handle = None
+
         # Subscribe to available_skills topic from skills_action_server (latched / transient_local)
         self._skills_qos = QoSProfile(
             depth=1,
@@ -576,11 +585,6 @@ class BrainClientNode(Node):
         # Gaze tracker (initialized if directive uses gaze)
         self._gaze_tracker = None
         self._update_gaze_tracker()
-
-        self.primitive_running = None
-        self._pending_reregistration = False
-        # Add a variable to store the current goal handle
-        self._goal_handle = None
 
         # Add a subscription to change directive
         self.directive_sub = self.create_subscription(
@@ -1132,8 +1136,12 @@ class BrainClientNode(Node):
         """
         Publish the list of input devices that should be active based on current directive.
         The input_manager_node subscribes to this and activates/deactivates inputs accordingly.
+        Only activates inputs when the brain is active to avoid running STT etc. while idle.
         """
         if not self.current_directive:
+            return
+
+        if not self.is_brain_active:
             return
 
         try:
