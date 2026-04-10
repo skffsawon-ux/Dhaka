@@ -31,17 +31,22 @@ def upload_data_files(
     filenames: list[str],
     upload_urls: dict[str, str],
     download_urls: dict[str, str],
+    file_offset: int = 0,
+    total_files: int | None = None,
 ) -> Generator[ProgressUpdate, None, None]:
     """
     Upload each file in *filenames* directly to signed URLs.
 
     Yields a :class:`ProgressUpdate` after each file is uploaded and verified.
     Skips files that are already uploaded (verified by HEAD).
+
+    *file_offset* and *total_files* allow callers to supply correct global
+    indices when uploading in batches (e.g. "[53/1500]" instead of "[3/50]").
     """
-    total = len(filenames)
+    total = total_files if total_files is not None else len(filenames)
 
     work_items: list[tuple[int, str]] = []
-    for idx, name in enumerate(filenames, start=1):
+    for idx, name in enumerate(filenames, start=file_offset + 1):
         source_path = source_dir / name
         download_url = download_urls.get(name)
         if download_url and _is_already_uploaded(client, source_path, download_url):
@@ -141,7 +146,7 @@ def upload_data_files(
         message="Verifying all uploads…",
     )
 
-    for idx, name in enumerate(filenames, start=1):
+    for idx, name in enumerate(filenames, start=file_offset + 1):
         download_url = download_urls.get(name)
 
         if not download_url:
@@ -159,7 +164,7 @@ def upload_data_files(
 
     yield ProgressUpdate(
         stage=ProgressStage.VERIFYING,
-        message=f"All {total} files verified",
+        message=f"All {len(filenames)} files verified",
     )
 
 

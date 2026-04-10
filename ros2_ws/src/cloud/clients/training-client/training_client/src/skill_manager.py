@@ -17,6 +17,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator
 
+from requests.exceptions import ConnectionError, Timeout
+
 from .client import APIError, OrchestratorClient
 from .downloader import download_results, download_skill_data, download_files
 from .types import (
@@ -37,6 +39,9 @@ _IGNORE_PATTERNS = {".git", "__pycache__", "*.zst", "*.zst.tmp"}
 SKILL_JSON = "server-skill.json"
 METADATA_JSON = "metadata.json"
 _LOCK_TIMEOUT = 10  # seconds
+
+_URL_REQUEST_MAX_RETRIES = 3
+_URL_REQUEST_BACKOFF_BASE = 5  # seconds
 
 
 @contextmanager
@@ -254,16 +259,40 @@ class SkillManager:
             skill_id=skill_id,
         )
 
-        url_resp = self.client.request_file_urls(skill_id, filenames)
+        batch_size = self.config.url_batch_size
+        total_batches = (len(filenames) + batch_size - 1) // batch_size
 
-        yield from upload_data_files(
-            client=self.client,
-            config=self.config,
-            source_dir=source_dir,
-            filenames=filenames,
-            upload_urls=url_resp.get("upload_urls", {}),
-            download_urls=url_resp.get("download_urls", {}),
-        )
+        for batch_start in range(0, len(filenames), batch_size):
+            batch = filenames[batch_start : batch_start + batch_size]
+            batch_num = batch_start // batch_size + 1
+
+            for attempt in range(1, _URL_REQUEST_MAX_RETRIES + 1):
+                try:
+                    url_resp = self.client.request_file_urls(skill_id, batch)
+                    break
+                except (ConnectionError, Timeout, OSError) as e:
+                    if attempt == _URL_REQUEST_MAX_RETRIES:
+                        raise
+                    delay = _URL_REQUEST_BACKOFF_BASE * (2 ** (attempt - 1))
+                    logger.warning(
+                        "URL request batch %d/%d attempt %d/%d failed: %s "
+                        "— retrying in %ds",
+                        batch_num, total_batches,
+                        attempt, _URL_REQUEST_MAX_RETRIES,
+                        e, delay,
+                    )
+                    time.sleep(delay)
+
+            yield from upload_data_files(
+                client=self.client,
+                config=self.config,
+                source_dir=source_dir,
+                filenames=batch,
+                upload_urls=url_resp.get("upload_urls", {}),
+                download_urls=url_resp.get("download_urls", {}),
+                file_offset=batch_start,
+                total_files=len(filenames),
+            )
 
         yield ProgressUpdate(
             stage=ProgressStage.DONE,
