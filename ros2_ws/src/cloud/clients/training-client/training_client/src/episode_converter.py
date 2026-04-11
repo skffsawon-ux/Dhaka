@@ -215,21 +215,22 @@ def _encode_camera_to_mp4(
         dset = f[f"observations/images/{camera_name}"]
         num_frames, height, width, channels = dset.shape
 
-        gst_pipeline = (
-            f"fdsrc fd=0 ! "
-            f"rawvideoparse width={width} height={height} "
-            f"format=bgr framerate={fps}/1 ! "
-            f"videoconvert ! "
-            f"x264enc pass=qual quantizer=23 speed-preset=ultrafast threads=4 ! "
-            f"h264parse ! "
-            f"mp4mux ! "
-            f"filesink location={mp4_path}"
-        )
+        gst_args = [
+            "nice", "-n", "0", "gst-launch-1.0", "-e",
+            "fdsrc", "fd=0", "!",
+            "rawvideoparse", f"width={width}", f"height={height}",
+            "format=bgr", f"framerate={fps}/1", "!",
+            "videoconvert", "!",
+            "x264enc", "pass=qual", "quantizer=23", "speed-preset=ultrafast", "threads=4", "!",
+            "h264parse", "!",
+            "mp4mux", "!",
+            "filesink", f"location={mp4_path}",
+        ]
 
         proc = subprocess.Popen(
-            ["nice", "-n", "0", "gst-launch-1.0", "-e", *gst_pipeline.split()],
+            gst_args,
             stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
 
@@ -245,10 +246,10 @@ def _encode_camera_to_mp4(
         except BrokenPipeError:
             pass
 
-        proc.wait()
+        _, stderr_bytes = proc.communicate()
 
         if proc.returncode != 0:
-            stderr = proc.stderr.read().decode(errors="replace")
+            stderr = stderr_bytes.decode(errors="replace")
             mp4_path.unlink(missing_ok=True)
             raise RuntimeError(
                 f"gst-launch-1.0 exited with code {proc.returncode}: {stderr}"

@@ -14,7 +14,6 @@ from typing import Generator
 
 from .client import OrchestratorClient
 from .types import (
-    ClientConfig,
     FileProgress,
     ProgressStage,
     ProgressUpdate,
@@ -26,7 +25,6 @@ logger = logging.getLogger(__name__)
 def upload_data_files(
     *,
     client: OrchestratorClient,
-    config: ClientConfig,
     source_dir: Path,
     filenames: list[str],
     upload_urls: dict[str, str],

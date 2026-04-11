@@ -33,9 +33,6 @@ from .uploader import upload_data_files
 
 logger = logging.getLogger(__name__)
 
-# Files/dirs to skip when enumerating source files
-_IGNORE_PATTERNS = {".git", "__pycache__", "*.zst", "*.zst.tmp"}
-
 SKILL_JSON = "server-skill.json"
 METADATA_JSON = "metadata.json"
 _LOCK_TIMEOUT = 10  # seconds
@@ -285,7 +282,6 @@ class SkillManager:
 
             yield from upload_data_files(
                 client=self.client,
-                config=self.config,
                 source_dir=source_dir,
                 filenames=batch,
                 upload_urls=url_resp.get("upload_urls", {}),
@@ -487,7 +483,7 @@ class SkillManager:
     ) -> Generator[ProgressUpdate, None, None]:
         """Download the input training data files for a skill.
 
-        Files are saved into *dest_dir*.  ``.zst`` files are auto-decompressed.
+        Files are saved into *dest_dir*.
         Yields :class:`ProgressUpdate` for each file downloaded.
         """
         yield from download_skill_data(
@@ -504,8 +500,7 @@ class SkillManager:
 def _enumerate_files(source_dir: Path) -> list[str]:
     """
     List uploadable files in *source_dir*: root-level files and
-    everything under ``data/``.  Skips hidden dirs, __pycache__,
-    and .zst artifacts.
+    everything under ``data/``.  Skips hidden dirs and __pycache__.
     """
     files: list[str] = []
 

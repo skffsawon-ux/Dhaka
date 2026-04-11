@@ -158,7 +158,7 @@ def do_upload(
     skill_id: str,
     skill_dir: str,
 ) -> None:
-    """Compress + upload data files for *skill_id*."""
+    """Upload data files for *skill_id*."""
     sid = skill_id[:8]
     prev_stage: str | None = None
     prev_msg: str | None = None
