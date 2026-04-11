@@ -27,7 +27,11 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from innate_cloud_msgs.msg import TrainingJobList, TrainingParams, TransferProgress
 from innate_cloud_msgs.srv import CreateRun, DownloadResults, GetTrainingStatus, SubmitSkill
 
-from training_client.src.skill_manager import SkillManager, read_skill_id
+from training_client.src.skill_manager import (
+    SkillManager,
+    read_skill_id,
+    read_uploaded_episode_count as _read_ep_count_from_disk,
+)
 from training_client.src.types import (
     ClientConfig,
     DEFAULT_AUTH_ISSUER_URL,
@@ -67,7 +71,13 @@ def _build_training_params(
     if msg.preset:
         params["preset"] = msg.preset
     if msg.env:
-        params["env"] = list(msg.env)
+        env_dict: dict[str, str] = {}
+        for entry in msg.env:
+            key, _, value = entry.partition("=")
+            if key:
+                env_dict[key] = value
+        if env_dict:
+            params["env"] = env_dict
     return (params or None), None
 
 
@@ -191,7 +201,7 @@ class TrainingNode(Node):
 
     def _build_skill_statuses(self) -> list:
         """Build the current list of TrainingSkillStatus from the store."""
-        jobs, skills, transfers, completed, dir_map = self._store.snapshot()
+        jobs, skills, transfers, completed, dir_map, ep_counts = self._store.snapshot()
 
         runs_by_skill: dict[str, list] = defaultdict(list)
         for run in jobs:
@@ -202,7 +212,11 @@ class TrainingNode(Node):
 
         for sid in sorted(all_skill_ids):
             upload_xfer = transfers.get((TransferProgress.UPLOAD, sid, -1))
-            upload_done = (TransferProgress.UPLOAD, sid, -1) in completed
+            # upload_done: in-memory completed set OR persisted ep count exists
+            upload_done = (
+                (TransferProgress.UPLOAD, sid, -1) in completed
+                or ep_counts.get(sid, -1) >= 0
+            )
 
             dl_xfers: dict[int, TransferProgress] = {}
             dl_done: set[int] = set()
@@ -224,6 +238,7 @@ class TrainingNode(Node):
                     dl_xfers,
                     dl_done,
                     skill_dir=dir_map.get(sid, ""),
+                    uploaded_episode_count=ep_counts.get(sid, -1),
                 )
             )
         return result
@@ -247,6 +262,11 @@ class TrainingNode(Node):
             lookup_skill_id = read_skill_id(req.skill_dir)
             if lookup_skill_id:
                 self._store.register_dir(lookup_skill_id, req.skill_dir)
+                if self._store.get_uploaded_ep_count(lookup_skill_id) < 0:
+                    self._store.set_uploaded_ep_count(
+                        lookup_skill_id,
+                        _read_ep_count_from_disk(req.skill_dir),
+                    )
 
         res.found = False
         for skill in self._build_skill_statuses():
